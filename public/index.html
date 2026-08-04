@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>海报文案修改</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>海报文案修改</h1>
+      <div class="topbar-right">
+        <span id="status-chip" class="chip">检查中…</span>
+        <a class="link" href="config.html">设置</a>
+      </div>
+    </header>
+
+    <main>
+      <!-- 第一步：上传 -->
+      <section id="stage-upload" class="stage">
+        <label id="dropzone" for="file-input">
+          <div class="dropzone-inner">
+            <div class="dropzone-icon">＋</div>
+            <p class="dropzone-title">把海报拖进来，或点击选择</p>
+            <p class="dropzone-hint">支持 JPG / PNG / WebP，最大 12MB</p>
+          </div>
+          <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+        </label>
+      </section>
+
+      <!-- 第二步：编辑 -->
+      <section id="stage-edit" class="stage hidden">
+        <div class="workspace">
+          <div class="pane pane-image">
+            <div class="pane-head">
+              <span id="canvas-info" class="muted"></span>
+              <button id="btn-reset" class="btn btn-ghost btn-sm" type="button">换一张</button>
+            </div>
+            <div id="image-wrap" class="image-wrap">
+              <img id="preview" alt="海报预览" />
+              <div id="overlay" class="overlay"></div>
+            </div>
+          </div>
+
+          <div class="pane pane-list">
+            <div class="pane-head">
+              <span id="list-title">识别到的文字</span>
+              <span id="edit-count" class="chip chip-quiet">未改动</span>
+            </div>
+            <div id="element-list" class="element-list"></div>
+            <div class="pane-foot">
+              <button id="btn-generate" class="btn btn-primary" type="button" disabled>生成修改后的图</button>
+              <p id="generate-hint" class="muted small">改动至少一处文字后可生成</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 第三步：结果 -->
+      <section id="stage-result" class="stage hidden">
+        <div class="result-head">
+          <h2 id="result-title">正在生成…</h2>
+          <div class="result-actions">
+            <a id="btn-download" class="btn btn-primary hidden" download="poster-edited.jpg">下载</a>
+            <button id="btn-back" class="btn btn-ghost" type="button">返回继续改</button>
+          </div>
+        </div>
+        <div id="result-body" class="result-body">
+          <div class="spinner"></div>
+          <p id="result-note" class="muted">提交中…</p>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

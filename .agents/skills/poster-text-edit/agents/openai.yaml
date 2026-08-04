@@ -1,0 +1,5 @@
+﻿interface:
+  display_name: "海报文案修改"
+  short_description: "识别并精准替换海报文字，保留原有版式并调用 Codex 生图"
+  default_prompt: "使用 $poster-text-edit 修改海报中的指定文案并保存结果。"
+

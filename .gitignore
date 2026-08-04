@@ -1,0 +1,17 @@
+node_modules/
+
+# 密钥与运行时数据，绝对不能进版本库
+data/
+*.local.json
+.env
+.env.*
+!.env.example
+
+# 生成结果与上传缓存
+output/
+uploads/
+tmp/
+
+# 日志
+*.log
+npm-debug.log*

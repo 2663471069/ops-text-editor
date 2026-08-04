@@ -1,0 +1,19 @@
+{
+  "name": "ops-text-editor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "海报 OCR 文案替换：识别图片文字 → 修改 → 重新出图",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.2",
+    "express": "^5.2.1"
+  }
+}
