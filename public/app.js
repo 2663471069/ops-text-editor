@@ -20,6 +20,7 @@ const state = {
   pollErrors: 0,
   imageProvider: null,
   imageEstimate: { minMs: 5 * 60 * 1000, maxMs: 15 * 60 * 1000, samples: 0 },
+  fonts: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -120,6 +121,22 @@ async function refreshStatus() {
   } catch (error) {
     el.statusChip.textContent = '服务未就绪';
     el.statusChip.className = 'chip chip-warn';
+  }
+}
+
+async function refreshFonts() {
+  try {
+    const { fonts } = await api('/api/fonts');
+    state.fonts = fonts ?? [];
+    const style = document.createElement('style');
+    style.dataset.companyFonts = 'true';
+    style.textContent = state.fonts.map((font, index) =>
+      `@font-face{font-family:"CompanyPreview${index}";src:url("${font.url}");font-display:swap}`
+    ).join('\n');
+    document.head.querySelector('style[data-company-fonts]')?.remove();
+    document.head.append(style);
+  } catch (error) {
+    console.warn('[fonts] 加载失败:', error.message);
   }
 }
 
@@ -237,6 +254,34 @@ function buildItem(item) {
   const tools = document.createElement('div');
   tools.className = 'item-tools';
 
+  const fontSelect = document.createElement('select');
+  fontSelect.className = 'font-select';
+  fontSelect.title = '选择公司字体；不选择时由 AI 保留原字体';
+  fontSelect.append(new Option('字体：自动保留原样', ''));
+  const groups = new Map();
+  for (const font of state.fonts) {
+    let group = groups.get(font.family);
+    if (!group) {
+      group = document.createElement('optgroup');
+      group.label = font.family;
+      groups.set(font.family, group);
+      fontSelect.append(group);
+    }
+    const option = new Option(font.variant, font.id);
+    option.style.fontFamily = `CompanyPreview${state.fonts.indexOf(font)}`;
+    group.append(option);
+  }
+  fontSelect.value = edit.fontId ?? '';
+  const applyFontPreview = () => {
+    const fontIndex = state.fonts.findIndex((font) => font.id === fontSelect.value);
+    input.style.fontFamily = fontIndex >= 0 ? `CompanyPreview${fontIndex}` : '';
+  };
+  fontSelect.addEventListener('change', () => {
+    setEdit(item.zIndex, { fontId: fontSelect.value || undefined });
+    applyFontPreview();
+  });
+  applyFontPreview();
+
   const alignGroup = document.createElement('div');
   alignGroup.className = 'align-group';
   for (const [mode, label] of [
@@ -274,7 +319,7 @@ function buildItem(item) {
     if (!extra.classList.contains('hidden')) extra.focus();
   });
 
-  tools.append(alignGroup, extraToggle);
+  tools.append(fontSelect, alignGroup, extraToggle);
   node.append(head, input, tools, extra);
   return node;
 }
@@ -396,6 +441,7 @@ function collectChanges() {
       extraInstruction: edit.extraInstruction,
       isVertical: item.isVertical,
       fontSize: item.fontSize,
+      fontId: edit.fontId,
       // 原图像素坐标，不是页面上量出来的
       box: { x: item.x, y: item.y, w: item.w, h: item.h },
     });
@@ -435,6 +481,10 @@ function renderChangeLog(changes) {
     after.className = change.remove ? 'change-log-remove' : '';
     after.textContent = change.remove ? '清除该范围' : change.modified;
     row.append(before, arrow, after);
+    if (change.fontId) {
+      const selected = state.fonts.find((font) => font.id === change.fontId);
+      if (selected) row.title = `点击定位到对应识别框 · 字体 ${selected.label}`;
+    }
     if (item) row.addEventListener('click', () => focusItem(item.zIndex));
     return row;
   }));
@@ -692,7 +742,9 @@ el.btnBack.addEventListener('click', () => {
 el.btnNext.addEventListener('click', () => startNewPoster());
 el.btnReset.addEventListener('click', () => startNewPoster());
 
-refreshStatus();
+Promise.all([refreshStatus(), refreshFonts()]).then(() => {
+  if (state.elements.length) renderList();
+});
 if (new URLSearchParams(location.search).get('new') === '1') {
   startNewPoster({ findLatest: true }).finally(() => {
     window.history.replaceState(null, '', 'index.html');

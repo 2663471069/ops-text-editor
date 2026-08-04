@@ -97,6 +97,7 @@ function historyCard(record) {
       after.className = change.remove ? 'history-remove' : '';
       after.textContent = change.remove ? '清除该范围' : change.modified;
       row.append(before, arrow, after);
+      if (change.fontLabel) row.title = `公司字体：${change.fontLabel}`;
       previewList.append(row);
     }
     if (record.changeCount > record.changesPreview.length) {
@@ -209,6 +210,12 @@ async function showDetail(id) {
       const after = document.createElement('strong');
       after.textContent = change.remove ? '清除该范围文字' : change.modified;
       row.append(before, arrow, after);
+      if (change.fontLabel) {
+        const font = document.createElement('small');
+        font.className = 'muted';
+        font.textContent = `字体：${change.fontLabel}`;
+        after.append(document.createElement('br'), font);
+      }
       changes.append(row);
     }
 

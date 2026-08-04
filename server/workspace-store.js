@@ -38,7 +38,7 @@ function safeEdits(edits) {
     const index = Number(entry?.index);
     if (!Number.isInteger(index) || index < 0 || index > 10_000) throw new Error('草稿修改序号无效');
     const out = { index };
-    for (const [key, max] of [['modified', 200], ['extraInstruction', 200]]) {
+    for (const [key, max] of [['modified', 200], ['extraInstruction', 200], ['fontId', 300]]) {
       if (entry?.[key] === undefined || entry?.[key] === '') continue;
       const value = String(entry[key]);
       if (value.length > max) throw new Error(`${key} 超过 ${max} 字上限`);
@@ -91,11 +91,15 @@ function publicHistory(record, { detail = false } = {}) {
     status: record.status,
     provider: record.provider,
     changeCount: changes.length,
-    changesPreview: changes.slice(0, 3).map((change) => ({
-      original: String(change.original ?? ''),
-      modified: change.remove === true ? '' : String(change.modified ?? ''),
-      remove: change.remove === true,
-    })),
+    changesPreview: changes.slice(0, 3).map((change) => {
+      const preview = {
+        original: String(change.original ?? ''),
+        modified: change.remove === true ? '' : String(change.modified ?? ''),
+        remove: change.remove === true,
+      };
+      if (change.fontLabel) preview.fontLabel = change.fontLabel;
+      return preview;
+    }),
     createdAt: record.createdAt,
     completedAt: record.completedAt ?? null,
     failedAt: record.failedAt ?? null,

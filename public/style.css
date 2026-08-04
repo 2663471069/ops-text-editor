@@ -354,6 +354,23 @@ main {
   margin-top: 7px;
 }
 
+.font-select {
+  min-width: 0;
+  max-width: 190px;
+  height: 27px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.font-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .align-group {
   display: flex;
   border: 1px solid var(--border);

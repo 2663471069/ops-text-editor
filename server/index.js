@@ -20,6 +20,7 @@ import { generate } from './image/index.js';
 import { isCodexAvailable } from './image/codex.js';
 import { measure } from './image/codec.js';
 import { makeProbeImage } from './image/probe.js';
+import { listFonts, publicFont, resolveFont } from './fonts.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT ?? 8787);
@@ -124,6 +125,12 @@ function normalizeChanges(changes, canvas) {
       throw err;
     }
     const remove = change.remove === true || isRemovalInstruction(change.modified);
+    const font = change.fontId ? resolveFont(change.fontId) : null;
+    if (change.fontId && !font) {
+      const err = new Error(`第 ${index + 1} 处选择的字体不存在，请重新选择`);
+      err.statusCode = 400;
+      throw err;
+    }
     return {
       original: change.original,
       modified: remove ? '' : change.modified,
@@ -132,6 +139,8 @@ function normalizeChanges(changes, canvas) {
       extraInstruction: change.extraInstruction || undefined,
       isVertical: change.isVertical === true,
       fontSize: Number(change.fontSize) > 0 ? Number(change.fontSize) : undefined,
+      fontId: font?.id,
+      fontLabel: font?.label,
       box,
       // 位置描述由原图像素坐标算出，不接受前端传来的缩放后 DOM 坐标
       position: describePosition({ ...box, isVertical: change.isVertical === true }, canvas),
@@ -449,6 +458,15 @@ app.put('/api/product-showcase/prompts', (req, res) => {
 });
 
 // ---------- 杂项 ----------
+
+app.get('/api/fonts', (req, res) => ok(res, { fonts: listFonts().map(publicFont) }));
+
+app.get('/api/fonts/file', (req, res) => {
+  const font = resolveFont(req.query.id);
+  if (!font) return fail(res, 404, '字体不存在');
+  res.set('Cache-Control', 'private, max-age=3600');
+  return res.sendFile(font.path);
+});
 
 app.get('/api/health', (req, res) => {
   const c = configStore.getPublic();

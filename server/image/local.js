@@ -9,6 +9,7 @@
 import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
 import { existsSync } from 'node:fs';
 import { decode, JPEG_QUALITY } from './codec.js';
+import { resolveFont } from '../fonts.js';
 
 // Windows 常见中文字体，按优先级注册第一个存在的
 const FONT_CANDIDATES = [
@@ -21,6 +22,17 @@ const FONT_CANDIDATES = [
 ];
 
 let fontFamily = null;
+const registeredCompanyFonts = new Map();
+
+function fontForChange(change) {
+  const font = resolveFont(change.fontId);
+  if (!font) return ensureFont();
+  if (registeredCompanyFonts.has(font.id)) return registeredCompanyFonts.get(font.id);
+  const alias = `CompanyFont${registeredCompanyFonts.size + 1}`;
+  if (!GlobalFonts.registerFromPath(font.path, alias)) return ensureFont();
+  registeredCompanyFonts.set(font.id, alias);
+  return alias;
+}
 
 /** 注册并返回可用的中文字体族名。probe.js 也用它，避免测试图渲染成方块。 */
 export function ensureFont() {
@@ -194,7 +206,6 @@ function drawVertical(ctx, text, box, size) {
  * @returns {Promise<{buffer:Buffer, mime:string, width:number, height:number, notes:string[]}>}
  */
 export async function render({ imageBuffer, changes, quality = JPEG_QUALITY }) {
-  const family = ensureFont();
   const image = await decode(imageBuffer);
   const canvasSize = { width: image.width, height: image.height };
 
@@ -204,6 +215,7 @@ export async function render({ imageBuffer, changes, quality = JPEG_QUALITY }) {
 
   const notes = [];
   for (const [index, change] of changes.entries()) {
+    const family = fontForChange(change);
     const raw = change.box ?? change;
     const box = {
       x: Math.max(0, Math.round(Number(raw.x))),
@@ -249,6 +261,7 @@ export async function render({ imageBuffer, changes, quality = JPEG_QUALITY }) {
       if (size < startSize * 0.6) notes.push(`第 ${index + 1} 处新文案较长，字号已缩小到 ${size}px`);
       drawHorizontal(ctx, lines, box, size, change.alignmentMode ?? 'center');
     }
+    if (change.fontLabel) notes.push(`第 ${index + 1} 处使用 ${change.fontLabel}`);
   }
 
   return {

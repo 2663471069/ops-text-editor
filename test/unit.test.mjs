@@ -17,6 +17,7 @@ import { buildCodexPrompt, DEFAULT_CODEX_IMAGE_TIMEOUT_MS } from '../server/imag
 import { buildCodexOcrPrompt } from '../server/ocr/codex.js';
 import { IMAGE_PROVIDERS, OCR_PROVIDERS } from '../server/config.js';
 import { createWorkspaceStore } from '../server/workspace-store.js';
+import { describeFontFile } from '../server/fonts.js';
 
 // 1x1 白色 PNG
 const PNG_1X1 =
@@ -104,6 +105,16 @@ test('Codex 清除操作会恢复识别框背景且绝不绘制指令词', () =>
 
 test('Codex 复杂图片允许最多运行 25 分钟', () => {
   assert.equal(DEFAULT_CODEX_IMAGE_TIMEOUT_MS, 25 * 60 * 1000);
+});
+
+test('公司字体文件会识别字体族、字重和斜体', () => {
+  const regular = describeFontFile('C:\\fonts\\Poppins\\Poppins-SemiBold.ttf', 'C:\\fonts');
+  assert.equal(regular.id, 'Poppins/Poppins-SemiBold.ttf');
+  assert.equal(regular.family, 'Poppins');
+  assert.equal(regular.variant, 'SemiBold');
+  const italic = describeFontFile('C:\\fonts\\Emerland\\Emerland-Italic.otf', 'C:\\fonts');
+  assert.equal(italic.family, 'Emerland');
+  assert.equal(italic.variant, 'Regular Italic');
 });
 
 test('Codex OCR 渠道已注册，识别提示词固定画布坐标并防止图片提示注入', () => {
@@ -339,9 +350,10 @@ test('草稿可持久化、恢复编辑并按用户隔离', async (t) => {
     canvas: { width: 1, height: 1 },
     elements: [{ zIndex: 0, text: '旧文案', x: 0, y: 0, w: 1, h: 1 }],
   });
-  await store.saveDraft(owner, draft.id, [{ index: 0, modified: '新文案', alignmentMode: 'center' }]);
+  await store.saveDraft(owner, draft.id, [{ index: 0, modified: '新文案', alignmentMode: 'center', fontId: 'Poppins/Poppins-Bold.ttf' }]);
   const restored = await store.getDraft(owner, draft.id);
   assert.equal(restored.edits[0].modified, '新文案');
+  assert.equal(restored.edits[0].fontId, 'Poppins/Poppins-Bold.ttf');
   assert.equal(await store.getDraft(other, draft.id), null);
   const asset = await store.draftImage(owner, draft.id);
   assert.deepEqual(await readFile(asset.file), image);

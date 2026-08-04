@@ -126,6 +126,7 @@ export function formatChange(change, index, canvas) {
 
   const fontSize = Number(change.fontSize);
   if (Number.isFinite(fontSize) && fontSize > 0) parts.push(`原字号约${Math.round(fontSize)}px`);
+  if (change.fontLabel) parts.push(`指定公司字体: ${flatten(change.fontLabel)}`);
 
   // 非法对齐值抛错，不静默丢弃。
   const mode = change.alignmentMode;

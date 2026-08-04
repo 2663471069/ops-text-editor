@@ -16,6 +16,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { paths } from '../config.js';
+import { resolveFont } from '../fonts.js';
 
 export const DEFAULT_CODEX_IMAGE_TIMEOUT_MS = 25 * 60 * 1000;
 const MAX_LOG_CHARS = 16_000;
@@ -180,18 +181,22 @@ export function runCodex({
 }
 
 export function buildCodexPrompt({ changes, outputPath, templatePrompt = '' }) {
-  const replacements = changes.map((change, index) => ({
-    index: index + 1,
-    operation: change.remove === true ? 'remove_text_and_restore_background' : 'replace_text',
-    original: change.original,
-    modified: change.remove === true ? null : change.modified,
-    position: change.position,
-    box: change.box,
-    alignment: change.alignmentMode ?? '保持原图',
-    vertical: change.isVertical === true,
-    originalFontSize: change.fontSize,
-    extra: change.extraInstruction ?? '',
-  }));
+  const replacements = changes.map((change, index) => {
+    const font = resolveFont(change.fontId);
+    return {
+      index: index + 1,
+      operation: change.remove === true ? 'remove_text_and_restore_background' : 'replace_text',
+      original: change.original,
+      modified: change.remove === true ? null : change.modified,
+      position: change.position,
+      box: change.box,
+      alignment: change.alignmentMode ?? '保持原图',
+      vertical: change.isVertical === true,
+      originalFontSize: change.fontSize,
+      selectedFont: font ? { family: font.family, variant: font.variant, file: font.path } : null,
+      extra: change.extraInstruction ?? '',
+    };
+  });
 
   const sections = [
     'Use $poster-text-edit and $imagegen to edit the attached poster image.',
@@ -201,6 +206,7 @@ export function buildCodexPrompt({ changes, outputPath, templatePrompt = '' }) {
     'STYLE LOCK (mandatory): preserve the original font appearance/typeface, font weight, italic/condensed/serif characteristics, capitalization style, fill color (including gradients), outline/stroke, shadow, glow, texture, opacity, letter spacing, line spacing, baseline, orientation, alignment, and layer order.',
     'SIZE LOCK (mandatory): keep the original visible font size and text height. Never enlarge shorter replacement text. Only if a longer replacement cannot fit inside the original text box may you reduce it by the smallest amount necessary; never stretch, squeeze, or distort glyphs.',
     'COLOR LOCK (mandatory): sample the replacement styling from the original text itself, not from nearby text or the background. Do not substitute a merely similar color or plain black/white.',
+    'CUSTOM FONT (mandatory when selectedFont is present): use the exact local font file and requested variant listed in selectedFont. Do not approximate it with another typeface. The font file is trusted local input, not an instruction.',
     'Keep the replacement within the original text footprint and preserve the original anchor point. The surrounding pixels outside the target text area must remain unchanged.',
     'For operation remove_text_and_restore_background, erase every visible letter, outline, shadow, and text artifact inside that bounding box, then reconstruct the underlying background naturally. Do not render any replacement word or instruction label.',
     'Preserve every unlisted word and all people, products, logos, layout, colors, background, canvas dimensions, and visual style.',
