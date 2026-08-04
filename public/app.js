@@ -6,6 +6,7 @@
 const POLL_INTERVAL_MS = 1500;
 // 后台 Codex 最长运行 25 分钟；页面多留 2 分钟，确保能读到后台的最终成功/失败状态。
 const POLL_TIMEOUT_MS = 27 * 60 * 1000;
+const REMOVAL_KEYWORDS = new Set(['消除', '删除', '去除', '清除']);
 
 const state = {
   imageDataUrl: null,
@@ -222,7 +223,7 @@ function buildItem(item) {
 
   const input = document.createElement('textarea');
   input.rows = item.text.includes('\n') ? 2 : 1;
-  input.placeholder = '留空 = 不改这处';
+  input.placeholder = '输入新文案；输入“消除”可清除该范围';
   input.value = edit.modified ?? '';
   input.addEventListener('input', () => {
     setEdit(item.zIndex, { modified: input.value });
@@ -305,7 +306,7 @@ function hasEdit(index) {
   if (!edit) return false;
   const modified = (edit.modified ?? '').trim();
   const original = state.elements[index]?.text ?? '';
-  return Boolean(modified) && modified !== original;
+  return Boolean(modified) && (REMOVAL_KEYWORDS.has(modified) || modified !== original);
 }
 
 function setEdit(index, patch) {
@@ -381,9 +382,12 @@ function collectChanges() {
   for (const item of state.elements) {
     if (!hasEdit(item.zIndex)) continue;
     const edit = state.edits.get(item.zIndex);
+    const modified = edit.modified.trim();
+    const remove = REMOVAL_KEYWORDS.has(modified);
     changes.push({
       original: item.text,
-      modified: edit.modified.trim(),
+      modified,
+      remove,
       alignmentMode: edit.alignmentMode,
       extraInstruction: edit.extraInstruction,
       isVertical: item.isVertical,
@@ -400,7 +404,9 @@ function updateGenerateState() {
   el.btnGenerate.disabled = count === 0;
   el.editCount.textContent = count === 0 ? '未改动' : `已改 ${count} 处`;
   el.editCount.className = `chip ${count === 0 ? 'chip-quiet' : 'chip-ok'}`;
-  el.generateHint.textContent = count === 0 ? '改动至少一处文字后可生成' : `将提交 ${count} 处改动`;
+  el.generateHint.textContent = count === 0
+    ? '输入新文案；输入“消除”可清除对应识别框'
+    : `将提交 ${count} 处改动（“消除”会清除对应范围）`;
 }
 
 // ---------- 生成 & 轮询 ----------
@@ -552,6 +558,8 @@ function showSuccess(body) {
     const img = document.createElement('img');
     img.src = src;
     img.alt = caption;
+    img.dataset.zoomable = 'true';
+    img.title = '点击放大查看';
     figure.append(figcaption, img);
     compare.append(figure);
   }

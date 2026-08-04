@@ -59,6 +59,8 @@ function historyCard(record) {
   preview.src = record.resultUrl || record.originalUrl;
   preview.alt = record.status === 'completed' ? '生成结果缩略图' : '原图缩略图';
   preview.loading = 'lazy';
+  preview.dataset.zoomable = 'true';
+  preview.title = '点击放大查看';
 
   const body = document.createElement('div');
   body.className = 'history-card-body';
@@ -150,6 +152,8 @@ async function showDetail(id) {
       const image = document.createElement('img');
       image.src = src;
       image.alt = caption;
+      image.dataset.zoomable = 'true';
+      image.title = '点击放大查看';
       figure.append(label, image);
       compare.append(figure);
     }
@@ -168,7 +172,7 @@ async function showDetail(id) {
       arrow.className = 'muted';
       arrow.textContent = '→';
       const after = document.createElement('strong');
-      after.textContent = change.modified;
+      after.textContent = change.remove ? '清除该范围文字' : change.modified;
       row.append(before, arrow, after);
       changes.append(row);
     }

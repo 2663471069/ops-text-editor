@@ -13,7 +13,7 @@ import { createTaskStore } from './task-store.js';
 import { createWorkspaceStore, workspaceLimits } from './workspace-store.js';
 import { estimateDurationRange, parseCompletedCodexDurations } from './task-metrics.js';
 import { parseDetectRequest, parseGenerateRequest, LIMITS } from './validate.js';
-import { buildTextEditorPrompt, validateTemplate, DEFAULT_TEMPLATE } from './prompt.js';
+import { buildTextEditorPrompt, isRemovalInstruction, validateTemplate, DEFAULT_TEMPLATE } from './prompt.js';
 import { describePosition } from './position.js';
 import { detectText } from './ocr/index.js';
 import { generate } from './image/index.js';
@@ -123,9 +123,11 @@ function normalizeChanges(changes, canvas) {
       err.statusCode = 400;
       throw err;
     }
+    const remove = change.remove === true || isRemovalInstruction(change.modified);
     return {
       original: change.original,
-      modified: change.modified,
+      modified: remove ? '' : change.modified,
+      remove,
       alignmentMode: change.alignmentMode || undefined,
       extraInstruction: change.extraInstruction || undefined,
       isVertical: change.isVertical === true,

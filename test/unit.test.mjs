@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { parseGenerateRequest, parseDetectRequest, parseImageDataUrl } from '../server/validate.js';
-import { buildTextEditorPrompt, formatChange, validateTemplate, normalizeText, DEFAULT_TEMPLATE } from '../server/prompt.js';
+import { buildTextEditorPrompt, formatChange, isRemovalInstruction, validateTemplate, normalizeText, DEFAULT_TEMPLATE } from '../server/prompt.js';
 import { describePosition } from '../server/position.js';
 import { createQueue } from '../server/queue.js';
 import { createTaskStore } from '../server/task-store.js';
@@ -78,6 +78,23 @@ test('Codex 出图渠道已注册，提示词保留结构化替换与输出路�
   assert.match(prompt, /C:\\jobs\\result\.jpg/);
   assert.match(prompt, /SERVER_LAYOUT_GUIDANCE/);
   assert.match(prompt, /严格保持原图排版/);
+});
+
+test('Codex 清除操作会恢复识别框背景且绝不绘制指令词', () => {
+  const prompt = buildCodexPrompt({
+    changes: [{
+      original: 'XS SQUARE',
+      modified: '',
+      remove: true,
+      position: '画面顶部中间',
+      box: { x: 100, y: 80, w: 180, h: 40 },
+    }],
+    outputPath: 'C:\\jobs\\result.jpg',
+  });
+  assert.match(prompt, /"operation": "remove_text_and_restore_background"/);
+  assert.match(prompt, /"modified": null/);
+  assert.match(prompt, /erase every visible letter, outline, shadow/);
+  assert.match(prompt, /Do not render any replacement word or instruction label/);
 });
 
 test('Codex 复杂图片允许最多运行 25 分钟', () => {
@@ -158,6 +175,16 @@ test('缺 original / modified / position 都抛错', () => {
   assert.throws(() => formatChange({ ...baseChange, original: '' }, 0), /missing original/);
   assert.throws(() => formatChange({ ...baseChange, modified: '   ' }, 0), /missing modified/);
   assert.throws(() => formatChange({ original: 'a', modified: 'b' }, 0), /missing position/);
+});
+
+test('输入消除、删除、去除或清除会转换成识别框清除操作', () => {
+  for (const keyword of ['消除', '删除', '去除', '清除']) {
+    assert.equal(isRemovalInstruction(keyword), true);
+    const line = formatChange({ ...baseChange, modified: keyword }, 0);
+    assert.match(line, /操作: 清除文字并自然补全该识别框背景/);
+    assert.doesNotMatch(line, /改为: 「消除」|改为: 「删除」|改为: 「去除」|改为: 「清除」/);
+  }
+  assert.equal(isRemovalInstruction('消除文字'), false, '只有完整指令词才触发，避免误伤正常文案');
 });
 
 test('占位符只替换一轮，插入内容不会被二次展开', () => {

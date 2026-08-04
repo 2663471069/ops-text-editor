@@ -218,8 +218,9 @@ export async function render({ imageBuffer, changes, quality = JPEG_QUALITY }) {
       continue;
     }
 
+    const removing = change.remove === true;
     const text = String(change.modified ?? '').trim();
-    if (!text) {
+    if (!removing && !text) {
       notes.push(`第 ${index + 1} 处新文案为空，已跳过`);
       continue;
     }
@@ -230,6 +231,11 @@ export async function render({ imageBuffer, changes, quality = JPEG_QUALITY }) {
     // 盖掉旧文字：多留 1px 吃掉抗锯齿边缘
     ctx.fillStyle = rgb(background);
     ctx.fillRect(box.x - 1, box.y - 1, box.w + 2, box.h + 2);
+
+    if (removing) {
+      notes.push(`第 ${index + 1} 处文字已清除`);
+      continue;
+    }
 
     ctx.fillStyle = rgb(textColor);
     const lines = text.split('\n').filter(Boolean);
