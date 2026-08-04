@@ -546,6 +546,24 @@ main {
   border: 1px solid var(--border);
 }
 
+.result-completion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+}
+
+.result-duration {
+  color: var(--ok);
+  font-variant-numeric: tabular-nums;
+}
+
 img[data-zoomable="true"] {
   cursor: zoom-in;
 }
@@ -772,6 +790,36 @@ body.viewer-open {
 
 .history-meta {
   margin: 8px 0;
+}
+
+.history-duration,
+.history-detail-duration {
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-duration {
+  margin: 7px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ok) 9%, var(--surface-2));
+}
+
+.history-duration.processing,
+.history-detail-duration.processing {
+  color: var(--warn);
+}
+
+.history-duration.failed,
+.history-detail-duration.failed {
+  color: var(--danger);
+}
+
+.history-detail-duration {
+  display: block;
+  margin-top: 6px;
 }
 
 .history-preview-changes {

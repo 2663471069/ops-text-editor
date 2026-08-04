@@ -75,8 +75,13 @@ function historyCard(record) {
 
   const meta = document.createElement('p');
   meta.className = 'muted small history-meta';
-  meta.textContent = `${formatTime(record.createdAt)} · 用时 ${formatDuration(record.elapsedMs)} · ${record.provider ?? '未知方式'}`;
-  body.append(top, meta);
+  meta.textContent = `${formatTime(record.createdAt)} · ${record.provider ?? '未知方式'}`;
+  const duration = document.createElement('div');
+  duration.className = `history-duration ${record.status}`;
+  duration.textContent = record.status === 'processing'
+    ? `图片生成耗时：正在计时（${formatDuration(Date.now() - record.createdAt)}）`
+    : `图片生成耗时：${formatDuration(record.elapsedMs)}`;
+  body.append(top, meta, duration);
 
   if (record.changesPreview?.length) {
     const previewList = document.createElement('div');
@@ -163,8 +168,13 @@ async function showDetail(id) {
     title.textContent = `${record.changeCount} 处文案修改 · ${statusLabel(record.status)}`;
     const meta = document.createElement('p');
     meta.className = 'muted small';
-    meta.textContent = `${formatTime(record.createdAt)} · 用时 ${formatDuration(record.elapsedMs)}`;
-    heading.append(title, meta);
+    meta.textContent = `${formatTime(record.createdAt)} · ${record.provider ?? '未知方式'}`;
+    const duration = document.createElement('strong');
+    duration.className = `history-detail-duration ${record.status}`;
+    duration.textContent = record.status === 'processing'
+      ? `图片生成耗时：正在计时（${formatDuration(Date.now() - record.createdAt)}）`
+      : `图片生成耗时：${formatDuration(record.elapsedMs)}`;
+    heading.append(title, meta, duration);
     head.append(heading, button('返回记录', 'btn btn-ghost', loadHistory));
 
     const compare = document.createElement('div');

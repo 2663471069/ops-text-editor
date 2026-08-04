@@ -480,6 +480,14 @@ function formatDuration(milliseconds) {
   return rest ? `${minutes}分${rest}秒` : `${minutes}分钟`;
 }
 
+function formatDateTime(value) {
+  if (!value) return '刚刚';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(new Date(value));
+}
+
 function remainingEstimate(elapsedMs) {
   const { minMs, maxMs } = state.imageEstimate;
   if (elapsedMs >= maxMs) return '已超过常见时长，仍在处理（最长等待 25 分钟）';
@@ -569,12 +577,23 @@ function pollTask(taskId, deadline) {
 }
 
 function showSuccess(body) {
+  clearTimeout(state.pollTimer);
   const url = body.data?.[0];
   if (!url) {
     showFailure('任务完成但没有返回图片');
     return;
   }
   el.resultTitle.textContent = '生成完成';
+
+  const completion = document.createElement('div');
+  completion.className = 'result-completion';
+  const duration = document.createElement('strong');
+  duration.className = 'result-duration';
+  duration.textContent = `图片生成耗时：${formatDuration(Number(body.elapsedMs) || 0)}`;
+  const finished = document.createElement('span');
+  finished.className = 'muted small';
+  finished.textContent = `完成时间：${formatDateTime(body.completedAt)}`;
+  completion.append(duration, finished);
 
   const compare = document.createElement('div');
   compare.className = 'compare';
@@ -593,7 +612,7 @@ function showSuccess(body) {
     figure.append(figcaption, img);
     compare.append(figure);
   }
-  el.resultBody.replaceChildren(compare);
+  el.resultBody.replaceChildren(completion, compare);
 
   el.btnDownload.href = url;
   el.btnDownload.classList.remove('hidden');
