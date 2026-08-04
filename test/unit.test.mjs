@@ -8,6 +8,7 @@ import { buildTextEditorPrompt, formatChange, validateTemplate, normalizeText, D
 import { describePosition } from '../server/position.js';
 import { createQueue } from '../server/queue.js';
 import { createTaskStore } from '../server/task-store.js';
+import { DEFAULT_IMAGE_ESTIMATE, estimateDurationRange, parseCompletedCodexDurations } from '../server/task-metrics.js';
 import { normalizeElements, polygonToBox, mergeSameLine } from '../server/ocr/index.js';
 import { buildCodexPrompt, DEFAULT_CODEX_IMAGE_TIMEOUT_MS } from '../server/image/codex.js';
 import { buildCodexOcrPrompt } from '../server/ocr/codex.js';
@@ -284,6 +285,30 @@ test('任务公开状态包含失败时间和耗时，便于定位长任务超�
   const view = store.toPublic(task);
   assert.equal(view.failedAt, 6_500);
   assert.equal(view.elapsedMs, 5_500);
+});
+
+test('出图样本不足时使用保守的 5–15 分钟预计区间', () => {
+  const estimate = estimateDurationRange([418_000]);
+  assert.equal(estimate.minMs, DEFAULT_IMAGE_ESTIMATE.minMs);
+  assert.equal(estimate.maxMs, DEFAULT_IMAGE_ESTIMATE.maxMs);
+  assert.equal(estimate.samples, 1);
+});
+
+test('出图预计区间会从历史成功任务自动校准', () => {
+  const log = [
+    { status: 'completed', provider: 'codex', elapsedMs: 300_000 },
+    { status: 'failed', provider: 'codex', elapsedMs: 900_000 },
+    { status: 'completed', provider: 'local', elapsedMs: 1_000 },
+    { status: 'completed', provider: 'codex', elapsedMs: 420_000 },
+    { status: 'completed', provider: 'codex', elapsedMs: 600_000 },
+  ].map(JSON.stringify).join('\n');
+  const durations = parseCompletedCodexDurations(`${log}\n{broken`);
+  assert.deepEqual(durations, [300_000, 420_000, 600_000]);
+  const estimate = estimateDurationRange(durations);
+  assert.equal(estimate.samples, 3);
+  assert.ok(estimate.minMs < estimate.maxMs);
+  assert.ok(estimate.minMs >= 60_000);
+  assert.ok(estimate.maxMs <= 25 * 60 * 1000);
 });
 
 // ---------- OCR 归一化 ----------

@@ -17,6 +17,7 @@ const state = {
   pollTimer: null,
   pollErrors: 0,
   imageProvider: null,
+  imageEstimate: { minMs: 5 * 60 * 1000, maxMs: 15 * 60 * 1000, samples: 0 },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -94,10 +95,11 @@ function readFileAsDataUrl(file) {
 
 async function refreshStatus() {
   try {
-    const { ocrProvider, ocrReady, imageProvider, imageReady } = await api('/api/health');
+    const { ocrProvider, ocrReady, imageProvider, imageReady, imageEstimate } = await api('/api/health');
     const ocrLabel = { codex: 'Codex 视觉', mock: '假数据', tencent: '腾讯云', baidu: '百度云' }[ocrProvider] ?? ocrProvider;
     const imageLabel = { local: '本地合成', codex: 'Codex 生图', openai: 'API 生图' }[imageProvider] ?? imageProvider;
     state.imageProvider = imageProvider;
+    if (imageEstimate) state.imageEstimate = imageEstimate;
     const warn = ocrProvider === 'mock' || !ocrReady || !imageReady;
     el.statusChip.textContent = `识别 ${ocrLabel} · 出图 ${imageLabel}`;
     el.statusChip.className = `chip ${warn ? 'chip-warn' : 'chip-ok'}`;
@@ -343,7 +345,7 @@ async function generate() {
   showStage('result');
   el.resultTitle.textContent = '正在生成…';
   el.btnDownload.classList.add('hidden');
-  el.resultBody.replaceChildren(spinnerBlock('提交中…'));
+  updateGenerationProgress({ message: '提交中…', elapsedMs: 0 });
 
   try {
     const { taskId } = await api('/api/ocr/generate', {
@@ -352,9 +354,10 @@ async function generate() {
     });
     state.taskId = taskId;
     state.pollErrors = 0;
-    el.resultBody.replaceChildren(
-      spinnerBlock(state.imageProvider === 'codex' ? 'Codex 正在编辑海报，复杂图片通常需要 5–15 分钟…' : '已排队，等待处理…'),
-    );
+    updateGenerationProgress({
+      message: state.imageProvider === 'codex' ? 'Codex 正在编辑海报…' : '已排队，等待处理…',
+      elapsedMs: 0,
+    });
     pollTask(taskId, Date.now() + POLL_TIMEOUT_MS);
   } catch (error) {
     showFailure(error.message);
@@ -363,15 +366,65 @@ async function generate() {
   }
 }
 
-function spinnerBlock(text) {
+function formatDuration(milliseconds) {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}分${rest}秒` : `${minutes}分钟`;
+}
+
+function remainingEstimate(elapsedMs) {
+  const { minMs, maxMs } = state.imageEstimate;
+  if (elapsedMs >= maxMs) return '已超过常见时长，仍在处理（最长等待 25 分钟）';
+  const low = Math.max(0, minMs - elapsedMs);
+  const high = Math.max(0, maxMs - elapsedMs);
+  if (low < 30_000) return `预计还需不超过 ${formatDuration(high)}`;
+  return `预计还需约 ${formatDuration(low)}–${formatDuration(high)}`;
+}
+
+function spinnerBlock() {
   const wrap = document.createElement('div');
+  wrap.className = 'generation-progress';
   const spinner = document.createElement('div');
   spinner.className = 'spinner';
   const note = document.createElement('p');
-  note.className = 'muted';
-  note.textContent = text;
-  wrap.append(spinner, note);
+  note.className = 'generation-message';
+  const timing = document.createElement('p');
+  timing.className = 'generation-timing';
+  const track = document.createElement('div');
+  track.className = 'generation-track';
+  const bar = document.createElement('div');
+  bar.className = 'generation-bar';
+  track.append(bar);
+  const hint = document.createElement('p');
+  hint.className = 'muted small generation-hint';
+  wrap.append(spinner, note, timing, track, hint);
   return wrap;
+}
+
+function updateGenerationProgress({ message, elapsedMs }) {
+  let block = el.resultBody.querySelector('.generation-progress');
+  if (!block) {
+    block = spinnerBlock();
+    el.resultBody.replaceChildren(block);
+  }
+  block.querySelector('.generation-message').textContent = message;
+  const timing = block.querySelector('.generation-timing');
+  const bar = block.querySelector('.generation-bar');
+  const hint = block.querySelector('.generation-hint');
+  if (state.imageProvider === 'codex') {
+    timing.textContent = `已等待 ${formatDuration(elapsedMs)} · ${remainingEstimate(elapsedMs)}`;
+    const percent = Math.min(95, Math.max(3, Math.round((elapsedMs / state.imageEstimate.maxMs) * 100)));
+    bar.style.width = `${percent}%`;
+    hint.textContent = state.imageEstimate.samples >= 3
+      ? `根据最近 ${state.imageEstimate.samples} 次成功任务估算，实际时间会随图片复杂度变化`
+      : '当前历史样本较少，先按常见的 5–15 分钟估算';
+  } else {
+    timing.textContent = `已等待 ${formatDuration(elapsedMs)}`;
+    bar.style.width = '20%';
+    hint.textContent = '正在等待服务返回结果';
+  }
 }
 
 function pollTask(taskId, deadline) {
@@ -389,9 +442,9 @@ function pollTask(taskId, deadline) {
       }
       else {
         state.pollErrors = 0;
-        const seconds = Math.round((POLL_TIMEOUT_MS - (deadline - Date.now())) / 1000);
+        const elapsedMs = Number(body.elapsedMs) || (POLL_TIMEOUT_MS - (deadline - Date.now()));
         const prefix = state.imageProvider === 'codex' ? 'Codex 生图中' : '处理中';
-        el.resultBody.replaceChildren(spinnerBlock(`${prefix}…（已等待 ${seconds}s）`));
+        updateGenerationProgress({ message: `${prefix}…`, elapsedMs });
         pollTask(taskId, deadline);
       }
     } catch (error) {
@@ -399,7 +452,10 @@ function pollTask(taskId, deadline) {
       state.pollErrors += 1;
       if (Date.now() > deadline) showFailure(`无法取得任务最终状态：${error.message}`);
       else {
-        el.resultBody.replaceChildren(spinnerBlock(`连接暂时中断，正在重试…（第 ${state.pollErrors} 次）`));
+        updateGenerationProgress({
+          message: `连接暂时中断，正在重试…（第 ${state.pollErrors} 次）`,
+          elapsedMs: POLL_TIMEOUT_MS - (deadline - Date.now()),
+        });
         pollTask(taskId, deadline);
       }
     }

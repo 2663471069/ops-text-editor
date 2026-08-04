@@ -3,12 +3,14 @@
 import express from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import * as configStore from './config.js';
 import { createQueue } from './queue.js';
 import { createTaskStore } from './task-store.js';
+import { estimateDurationRange, parseCompletedCodexDurations } from './task-metrics.js';
 import { parseDetectRequest, parseGenerateRequest, LIMITS } from './validate.js';
 import { buildTextEditorPrompt, validateTemplate, DEFAULT_TEMPLATE } from './prompt.js';
 import { describePosition } from './position.js';
@@ -31,6 +33,14 @@ app.use(express.json({ limit: '25mb' })); // base64 图片体积上限由 valida
 const taskStore = createTaskStore();
 const limits = configStore.load().limits;
 const queue = createQueue({ perUser: limits.perUser, globalMax: limits.globalMax });
+let completedCodexDurations = [];
+try {
+  completedCodexDurations = parseCompletedCodexDurations(readFileSync(TASK_EVENT_LOG, 'utf8'));
+} catch {
+  // 首次运行还没有日志文件，使用保守默认区间。
+}
+// 把首次 Codex 可用性扫描放在服务启动阶段，避免用户第一次打开页面时承担扫描耗时。
+isCodexAvailable();
 
 // ---------- 身份 ----------
 // 单机自用：给每个浏览器发一个 uid cookie 作为归属标识。
@@ -81,6 +91,10 @@ async function recordTaskEvent(task, { status, provider, error }) {
     code: error?.code ?? null,
     diagnostic: error?.diagnostic || null,
   };
+  if (status === 'completed' && provider === 'codex' && Number.isFinite(event.elapsedMs)) {
+    completedCodexDurations.push(event.elapsedMs);
+    completedCodexDurations = completedCodexDurations.slice(-200);
+  }
   try {
     await appendFile(TASK_EVENT_LOG, `${JSON.stringify(event)}\n`, 'utf8');
   } catch (logError) {
@@ -302,18 +316,20 @@ app.put('/api/product-showcase/prompts', (req, res) => {
 
 app.get('/api/health', (req, res) => {
   const c = configStore.getPublic();
+  const codexAvailable = isCodexAvailable();
   return ok(res, {
     ocrProvider: c.ocr.provider,
     ocrReady:
       c.ocr.provider === 'mock' ||
-      (c.ocr.provider === 'codex' && isCodexAvailable()) ||
+      (c.ocr.provider === 'codex' && codexAvailable) ||
       c.ocr.hasCredentials,
     imageProvider: c.image.provider,
     imageReady:
       c.image.provider === 'local' ||
-      (c.image.provider === 'codex' && isCodexAvailable()) ||
+      (c.image.provider === 'codex' && codexAvailable) ||
       (c.image.provider === 'openai' && c.image.hasApiKey),
-    codexAvailable: isCodexAvailable(),
+    codexAvailable,
+    imageEstimate: estimateDurationRange(completedCodexDurations),
     limits: LIMITS,
     queue: queue.stats(),
     tasks: taskStore.size(),

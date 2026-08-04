@@ -20,6 +20,8 @@ import { paths } from '../config.js';
 export const DEFAULT_CODEX_IMAGE_TIMEOUT_MS = 25 * 60 * 1000;
 const MAX_LOG_CHARS = 16_000;
 const JOB_ROOT = path.join(paths.DATA_DIR, 'codex-jobs');
+const AVAILABILITY_CACHE_MS = 60_000;
+let availabilityCache = null;
 
 function canExecute(file) {
   try {
@@ -61,13 +63,17 @@ export function resolveCodexExecutable(env = process.env) {
   return process.platform === 'win32' ? 'codex.exe' : 'codex';
 }
 
-export function isCodexAvailable() {
+export function isCodexAvailable({ now = Date.now(), maxAgeMs = AVAILABILITY_CACHE_MS } = {}) {
+  if (availabilityCache && now < availabilityCache.expiresAt) return availabilityCache.value;
+  let value = false;
   try {
     const executable = resolveCodexExecutable();
-    return executable === 'codex' || executable === 'codex.exe' || canExecute(executable);
+    value = executable === 'codex' || executable === 'codex.exe' || canExecute(executable);
   } catch {
-    return false;
+    value = false;
   }
+  availabilityCache = { value, expiresAt: now + Math.max(0, maxAgeMs) };
+  return value;
 }
 
 export function imageExtension(buffer) {
