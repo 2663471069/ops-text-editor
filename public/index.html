@@ -11,7 +11,7 @@
       <h1>海报文案修改</h1>
       <div class="topbar-right">
         <span id="status-chip" class="chip">检查中…</span>
-        <a class="link" href="history.html">生成记录</a>
+        <a class="link" href="history.html">修改记录</a>
         <a class="link" href="config.html">设置</a>
       </div>
     </header>
@@ -52,6 +52,10 @@
               </div>
             </div>
             <div id="element-list" class="element-list"></div>
+            <details id="change-log" class="change-log hidden" open>
+              <summary>本次修改记录 <span id="change-log-count" class="chip chip-ok">0</span></summary>
+              <div id="change-log-list" class="change-log-list"></div>
+            </details>
             <div class="pane-foot">
               <button id="btn-generate" class="btn btn-primary" type="button" disabled>生成修改后的图</button>
               <p id="generate-hint" class="muted small">输入新文案；输入“消除”可清除对应识别框</p>

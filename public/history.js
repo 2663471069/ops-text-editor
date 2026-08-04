@@ -78,6 +78,31 @@ function historyCard(record) {
   meta.textContent = `${formatTime(record.createdAt)} · 用时 ${formatDuration(record.elapsedMs)} · ${record.provider ?? '未知方式'}`;
   body.append(top, meta);
 
+  if (record.changesPreview?.length) {
+    const previewList = document.createElement('div');
+    previewList.className = 'history-preview-changes';
+    for (const change of record.changesPreview) {
+      const row = document.createElement('div');
+      const before = document.createElement('span');
+      before.textContent = change.original;
+      const arrow = document.createElement('span');
+      arrow.className = 'muted';
+      arrow.textContent = '→';
+      const after = document.createElement('strong');
+      after.className = change.remove ? 'history-remove' : '';
+      after.textContent = change.remove ? '清除该范围' : change.modified;
+      row.append(before, arrow, after);
+      previewList.append(row);
+    }
+    if (record.changeCount > record.changesPreview.length) {
+      const more = document.createElement('p');
+      more.className = 'muted small';
+      more.textContent = `另有 ${record.changeCount - record.changesPreview.length} 处修改`;
+      previewList.append(more);
+    }
+    body.append(previewList);
+  }
+
   if (record.error) {
     const error = document.createElement('p');
     error.className = 'history-error small';
@@ -109,7 +134,7 @@ async function loadHistory() {
     const { records, limits } = await api('/api/history');
     retention.textContent = `只保存在这台电脑上 · 最多 ${limits.maxRecordsPerOwner} 条 · 保留 30 天`;
     if (!records.length) {
-      content.innerHTML = '<div class="history-empty"><p>还没有生成记录</p><a class="btn btn-primary history-start" href="index.html">去修改一张海报</a></div>';
+      content.innerHTML = '<div class="history-empty"><p>还没有修改记录</p><a class="btn btn-primary history-start" href="index.html">去修改一张海报</a></div>';
       return;
     }
     const grid = document.createElement('div');
@@ -206,7 +231,7 @@ async function restore(id) {
 }
 
 async function removeRecord(id) {
-  if (!confirm('确定删除这条生成记录吗？原图和结果图都会从本机删除。')) return;
+  if (!confirm('确定删除这条修改记录吗？原图和结果图都会从本机删除。')) return;
   try {
     await api(`/api/history/${encodeURIComponent(id)}`, { method: 'DELETE' });
     toast('记录已删除', 'ok');

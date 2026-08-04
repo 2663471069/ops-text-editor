@@ -37,6 +37,9 @@ const el = {
   listTitle: $('list-title'),
   editCount: $('edit-count'),
   elementList: $('element-list'),
+  changeLog: $('change-log'),
+  changeLogCount: $('change-log-count'),
+  changeLogList: $('change-log-list'),
   btnGenerate: $('btn-generate'),
   generateHint: $('generate-hint'),
   btnReset: $('btn-reset'),
@@ -400,13 +403,40 @@ function collectChanges() {
 }
 
 function updateGenerateState() {
-  const count = collectChanges().length;
+  const changes = collectChanges();
+  const count = changes.length;
   el.btnGenerate.disabled = count === 0;
   el.editCount.textContent = count === 0 ? '未改动' : `已改 ${count} 处`;
   el.editCount.className = `chip ${count === 0 ? 'chip-quiet' : 'chip-ok'}`;
   el.generateHint.textContent = count === 0
     ? '输入新文案；输入“消除”可清除对应识别框'
     : `将提交 ${count} 处改动（“消除”会清除对应范围）`;
+  renderChangeLog(changes);
+}
+
+function renderChangeLog(changes) {
+  el.changeLog.classList.toggle('hidden', changes.length === 0);
+  el.changeLogCount.textContent = String(changes.length);
+  el.changeLogList.replaceChildren(...changes.map((change) => {
+    const item = state.elements.find((element) =>
+      element.text === change.original && element.x === change.box.x && element.y === change.box.y);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'change-log-row';
+    row.title = '点击定位到对应识别框';
+    const before = document.createElement('span');
+    before.className = 'change-log-before';
+    before.textContent = change.original;
+    const arrow = document.createElement('span');
+    arrow.className = 'change-log-arrow';
+    arrow.textContent = '→';
+    const after = document.createElement('strong');
+    after.className = change.remove ? 'change-log-remove' : '';
+    after.textContent = change.remove ? '清除该范围' : change.modified;
+    row.append(before, arrow, after);
+    if (item) row.addEventListener('click', () => focusItem(item.zIndex));
+    return row;
+  }));
 }
 
 // ---------- 生成 & 轮询 ----------

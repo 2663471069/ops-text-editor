@@ -391,6 +391,70 @@ main {
   font-size: 12px;
 }
 
+/* ---------- 本次修改记录 ---------- */
+
+.change-log {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.change-log summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.change-log summary::-webkit-details-marker {
+  display: none;
+}
+
+.change-log-list {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+}
+
+.change-log-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.change-log-row:hover {
+  background: var(--surface-2);
+}
+
+.change-log-before,
+.change-log-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-log-arrow {
+  color: var(--muted);
+}
+
+.change-log-remove,
+.history-remove {
+  color: var(--danger);
+}
+
 /* ---------- 按钮 ---------- */
 
 .btn {
@@ -708,6 +772,33 @@ body.viewer-open {
 
 .history-meta {
   margin: 8px 0;
+}
+
+.history-preview-changes {
+  display: grid;
+  gap: 4px;
+  margin: 9px 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 11px;
+}
+
+.history-preview-changes > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 6px;
+}
+
+.history-preview-changes span,
+.history-preview-changes strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-preview-changes p {
+  margin: 2px 0 0;
 }
 
 .history-error {

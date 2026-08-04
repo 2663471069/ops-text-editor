@@ -371,7 +371,9 @@ test('生成结果落盘后可列出、查看、恢复和删除', async (t) => {
   const completed = await store.completeHistory(owner, started.id, PNG_1X1, 5_000);
   assert.equal(completed.status, 'completed');
   assert.match(completed.resultUrl, /\/api\/history\/.+\/result$/);
-  assert.equal((await store.listHistory(owner))[0].elapsedMs, 5_000);
+  const [summary] = await store.listHistory(owner);
+  assert.equal(summary.elapsedMs, 5_000);
+  assert.deepEqual(summary.changesPreview, [{ original: 'A', modified: 'B', remove: false }]);
   assert.equal((await store.getHistory(owner, started.id)).changes[0].modified, 'B');
   const result = await store.historyImage(owner, started.id, 'result');
   assert.deepEqual(await readFile(result.file), image);

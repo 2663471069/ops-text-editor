@@ -85,11 +85,17 @@ function publicDraft(record) {
 }
 
 function publicHistory(record, { detail = false } = {}) {
+  const changes = Array.isArray(record.changes) ? record.changes : [];
   const base = {
     id: record.id,
     status: record.status,
     provider: record.provider,
-    changeCount: record.changes?.length ?? 0,
+    changeCount: changes.length,
+    changesPreview: changes.slice(0, 3).map((change) => ({
+      original: String(change.original ?? ''),
+      modified: change.remove === true ? '' : String(change.modified ?? ''),
+      remove: change.remove === true,
+    })),
     createdAt: record.createdAt,
     completedAt: record.completedAt ?? null,
     failedAt: record.failedAt ?? null,
@@ -101,7 +107,7 @@ function publicHistory(record, { detail = false } = {}) {
   };
   if (detail) {
     base.canvas = record.canvas;
-    base.changes = record.changes ?? [];
+    base.changes = changes;
   }
   return base;
 }
