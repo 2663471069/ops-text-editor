@@ -44,6 +44,7 @@ const el = {
   generateHint: $('generate-hint'),
   btnReset: $('btn-reset'),
   btnBack: $('btn-back'),
+  btnNext: $('btn-next'),
   btnDownload: $('btn-download'),
   resultTitle: $('result-title'),
   resultBody: $('result-body'),
@@ -451,6 +452,7 @@ async function generate() {
   showStage('result');
   el.resultTitle.textContent = '正在生成…';
   el.btnDownload.classList.add('hidden');
+  el.btnNext.classList.add('hidden');
   updateGenerationProgress({ message: '提交中…', elapsedMs: 0 });
 
   try {
@@ -616,6 +618,7 @@ function showSuccess(body) {
 
   el.btnDownload.href = url;
   el.btnDownload.classList.remove('hidden');
+  el.btnNext.classList.remove('hidden');
   setDraftStatus('已生成并保存到记录', 'ok');
   toast('生成完成', 'ok');
 }
@@ -627,7 +630,37 @@ function showFailure(message) {
   note.className = 'muted';
   note.textContent = message;
   el.resultBody.replaceChildren(note);
+  el.btnNext.classList.remove('hidden');
   toast(message);
+}
+
+async function startNewPoster({ findLatest = false } = {}) {
+  clearTimeout(state.pollTimer);
+  clearTimeout(draftSaveTimer);
+  let draftId = state.draftId;
+  if (!draftId && findLatest) {
+    try {
+      const { draft } = await api('/api/drafts/latest');
+      draftId = draft?.id ?? null;
+    } catch (error) {
+      console.warn('[draft] 查询当前草稿失败:', error.message);
+    }
+  }
+
+  Object.assign(state, { imageDataUrl: null, draftId: null, canvas: null, elements: [], activeIndex: null, taskId: null });
+  state.edits.clear();
+  el.fileInput.value = '';
+  el.btnDownload.classList.add('hidden');
+  el.btnNext.classList.add('hidden');
+  showStage('upload');
+
+  if (draftId) {
+    try {
+      await api(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' });
+    } catch (error) {
+      console.warn('[draft] 删除失败:', error.message);
+    }
+  }
 }
 
 // ---------- 事件绑定 ----------
@@ -656,22 +689,14 @@ el.btnBack.addEventListener('click', () => {
   showStage('edit');
 });
 
-el.btnReset.addEventListener('click', async () => {
-  clearTimeout(state.pollTimer);
-  clearTimeout(draftSaveTimer);
-  const draftId = state.draftId;
-  Object.assign(state, { imageDataUrl: null, draftId: null, canvas: null, elements: [], activeIndex: null, taskId: null });
-  state.edits.clear();
-  el.fileInput.value = '';
-  showStage('upload');
-  if (draftId) {
-    try {
-      await api(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' });
-    } catch (error) {
-      console.warn('[draft] 删除失败:', error.message);
-    }
-  }
-});
+el.btnNext.addEventListener('click', () => startNewPoster());
+el.btnReset.addEventListener('click', () => startNewPoster());
 
 refreshStatus();
-restoreLatestDraft();
+if (new URLSearchParams(location.search).get('new') === '1') {
+  startNewPoster({ findLatest: true }).finally(() => {
+    window.history.replaceState(null, '', 'index.html');
+  });
+} else {
+  restoreLatestDraft();
+}

@@ -728,6 +728,16 @@ body.viewer-open {
   margin-bottom: 18px;
 }
 
+.history-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-next {
+  width: auto;
+}
+
 .history-heading h2,
 .history-heading p,
 .history-detail-head h2,

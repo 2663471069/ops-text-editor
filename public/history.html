@@ -21,7 +21,10 @@
           <h2>历史修改记录</h2>
           <p id="history-retention" class="muted small">记录保存在这台电脑上</p>
         </div>
-        <button id="btn-refresh-history" class="btn btn-ghost" type="button">刷新</button>
+        <div class="history-heading-actions">
+          <a class="btn btn-primary history-next" href="index.html?new=1">修改下一张</a>
+          <button id="btn-refresh-history" class="btn btn-ghost" type="button">刷新</button>
+        </div>
       </div>
       <section id="history-content" aria-live="polite">
         <div class="history-empty"><div class="spinner"></div><p class="muted">读取记录中…</p></div>
