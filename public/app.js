@@ -21,6 +21,8 @@ const state = {
   imageProvider: null,
   imageEstimate: { minMs: 5 * 60 * 1000, maxMs: 15 * 60 * 1000, samples: 0 },
   fonts: [],
+  elementFilter: 'all',
+  elementSearch: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -33,15 +35,26 @@ const el = {
   dropzone: $('dropzone'),
   fileInput: $('file-input'),
   preview: $('preview'),
+  btnZoom: $('btn-zoom'),
   overlay: $('overlay'),
   canvasInfo: $('canvas-info'),
   listTitle: $('list-title'),
   editCount: $('edit-count'),
   elementList: $('element-list'),
+  elementSearch: $('element-search'),
+  elementFilters: $('element-filters'),
+  elementEmpty: $('element-empty'),
+  filterAllCount: $('filter-all-count'),
+  filterEditedCount: $('filter-edited-count'),
+  filterUneditedCount: $('filter-unedited-count'),
+  batchFont: $('batch-font'),
+  btnApplyFont: $('btn-apply-font'),
   changeLog: $('change-log'),
   changeLogCount: $('change-log-count'),
   changeLogList: $('change-log-list'),
   btnGenerate: $('btn-generate'),
+  generationSummary: $('generation-summary'),
+  generationMeta: $('generation-meta'),
   generateHint: $('generate-hint'),
   btnReset: $('btn-reset'),
   btnBack: $('btn-back'),
@@ -105,6 +118,42 @@ async function imageUrlAsDataUrl(url) {
   return readFileAsDataUrl(await response.blob());
 }
 
+function fontById(fontId) {
+  return state.fonts.find((font) => font.id === fontId) ?? null;
+}
+
+function populateFontOptions(select, { placeholder = '字体：自动保留原样', selected = '' } = {}) {
+  const groups = new Map();
+  select.replaceChildren(new Option(placeholder, ''));
+  for (const [fontIndex, font] of state.fonts.entries()) {
+    let group = groups.get(font.family);
+    if (!group) {
+      group = document.createElement('optgroup');
+      group.label = font.family;
+      groups.set(font.family, group);
+      select.append(group);
+    }
+    const option = new Option(font.label, font.id);
+    option.style.fontFamily = `CompanyPreview${fontIndex}`;
+    group.append(option);
+  }
+  select.value = selected;
+  select.dataset.populated = 'true';
+}
+
+function generationEstimateLabel() {
+  if (state.imageProvider === 'local') return '本地合成 · 通常数秒完成';
+  if (state.imageProvider === 'codex') {
+    return `Codex 生图 · 预计 ${formatDuration(state.imageEstimate.minMs)}–${formatDuration(state.imageEstimate.maxMs)}`;
+  }
+  if (state.imageProvider === 'openai') return 'API 生图 · 时间取决于服务商';
+  return '正在读取出图方式…';
+}
+
+function updateGenerationMeta() {
+  if (el.generationMeta) el.generationMeta.textContent = generationEstimateLabel();
+}
+
 // ---------- 启动：查服务状态 ----------
 
 async function refreshStatus() {
@@ -114,6 +163,7 @@ async function refreshStatus() {
     const imageLabel = { local: '本地合成', codex: 'Codex 生图', openai: 'API 生图' }[imageProvider] ?? imageProvider;
     state.imageProvider = imageProvider;
     if (imageEstimate) state.imageEstimate = imageEstimate;
+    updateGenerationMeta();
     const warn = ocrProvider === 'mock' || !ocrReady || !imageReady;
     el.statusChip.textContent = `识别 ${ocrLabel} · 出图 ${imageLabel}`;
     el.statusChip.className = `chip ${warn ? 'chip-warn' : 'chip-ok'}`;
@@ -135,6 +185,7 @@ async function refreshFonts() {
     ).join('\n');
     document.head.querySelector('style[data-company-fonts]')?.remove();
     document.head.append(style);
+    populateFontOptions(el.batchFont, { placeholder: '批量字体：自动保留原样' });
   } catch (error) {
     console.warn('[fonts] 加载失败:', error.message);
   }
@@ -176,6 +227,7 @@ async function handleFile(file) {
     el.preview.src = dataUrl;
     el.canvasInfo.textContent = `${data.canvas.width} × ${data.canvas.height} px`;
     el.listTitle.textContent = `识别到 ${state.elements.length} 处文字`;
+    resetListView();
     renderBoxes();
     renderList();
     updateGenerateState();
@@ -197,6 +249,9 @@ function renderBoxes() {
       const box = document.createElement('div');
       box.className = 'box';
       box.dataset.index = String(item.zIndex);
+      box.tabIndex = 0;
+      box.setAttribute('role', 'button');
+      box.setAttribute('aria-label', `编辑第 ${item.zIndex + 1} 处：${item.text}`);
       box.style.left = `${(item.x / width) * 100}%`;
       box.style.top = `${(item.y / height) * 100}%`;
       box.style.width = `${(item.w / width) * 100}%`;
@@ -208,6 +263,11 @@ function renderBoxes() {
       box.append(tag);
 
       box.addEventListener('click', () => focusItem(item.zIndex));
+      box.addEventListener('keydown', (event) => {
+        if (!['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        focusItem(item.zIndex);
+      });
       return box;
     }),
   );
@@ -217,6 +277,91 @@ function renderBoxes() {
 function renderList() {
   el.elementList.replaceChildren(...state.elements.map(buildItem));
   syncBoxClasses();
+  applyListView();
+}
+
+function compact(value) {
+  return String(value ?? '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function itemMatchesView(item) {
+  const focusedItem = document.activeElement?.closest?.('.item');
+  if (Number(focusedItem?.dataset.index) === item.zIndex) return true;
+  const edited = hasEdit(item.zIndex);
+  if (state.elementFilter === 'edited' && !edited) return false;
+  if (state.elementFilter === 'unedited' && edited) return false;
+  if (!state.elementSearch) return true;
+  const edit = state.edits.get(item.zIndex);
+  return compact(`${item.text} ${edit?.modified ?? ''}`).includes(state.elementSearch);
+}
+
+function applyListView() {
+  const editedCount = state.elements.filter((item) => hasEdit(item.zIndex)).length;
+  el.filterAllCount.textContent = String(state.elements.length);
+  el.filterEditedCount.textContent = String(editedCount);
+  el.filterUneditedCount.textContent = String(state.elements.length - editedCount);
+  el.btnApplyFont.disabled = editedCount === 0;
+
+  for (const button of el.elementFilters.querySelectorAll('button[data-filter]')) {
+    const on = button.dataset.filter === state.elementFilter;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', String(on));
+  }
+
+  let visibleCount = 0;
+  for (const item of state.elements) {
+    const node = el.elementList.querySelector(`.item[data-index="${item.zIndex}"]`);
+    if (!node) continue;
+    const visible = itemMatchesView(item);
+    node.classList.toggle('filtered-out', !visible);
+    if (visible) visibleCount += 1;
+  }
+  el.elementEmpty.classList.toggle('hidden', visibleCount !== 0 || state.elements.length === 0);
+}
+
+function resetListView() {
+  state.elementFilter = 'all';
+  state.elementSearch = '';
+  el.elementSearch.value = '';
+  applyListView();
+}
+
+function createLazyFontSelect(item, input) {
+  const select = document.createElement('select');
+  select.className = 'font-select';
+  select.title = '选择公司字体；不选择时由 AI 保留原字体';
+
+  const showCurrent = () => {
+    const fontId = state.edits.get(item.zIndex)?.fontId ?? '';
+    const font = fontById(fontId);
+    select.replaceChildren(new Option(font ? font.label : '字体：自动保留原样', fontId));
+    select.value = fontId;
+    select.dataset.populated = 'false';
+  };
+  const ensureOptions = () => {
+    if (select.dataset.populated === 'true') return;
+    populateFontOptions(select, { selected: state.edits.get(item.zIndex)?.fontId ?? '' });
+  };
+  const applyPreview = () => {
+    const fontIndex = state.fonts.findIndex((font) => font.id === (state.edits.get(item.zIndex)?.fontId ?? ''));
+    input.style.fontFamily = fontIndex >= 0 ? `CompanyPreview${fontIndex}` : '';
+  };
+
+  showCurrent();
+  applyPreview();
+  select.addEventListener('pointerdown', ensureOptions);
+  select.addEventListener('focus', ensureOptions);
+  select.addEventListener('change', () => {
+    setEdit(item.zIndex, { fontId: select.value || undefined });
+    applyPreview();
+  });
+  select.refresh = () => {
+    const fontId = state.edits.get(item.zIndex)?.fontId ?? '';
+    if (select.dataset.populated === 'true') select.value = fontId;
+    else showCurrent();
+    applyPreview();
+  };
+  return select;
 }
 
 function buildItem(item) {
@@ -224,6 +369,7 @@ function buildItem(item) {
   const node = document.createElement('div');
   node.className = 'item';
   node.dataset.index = String(item.zIndex);
+  node.addEventListener('focusout', () => setTimeout(applyListView, 0));
 
   const head = document.createElement('div');
   head.className = 'item-head';
@@ -254,33 +400,7 @@ function buildItem(item) {
   const tools = document.createElement('div');
   tools.className = 'item-tools';
 
-  const fontSelect = document.createElement('select');
-  fontSelect.className = 'font-select';
-  fontSelect.title = '选择公司字体；不选择时由 AI 保留原字体';
-  fontSelect.append(new Option('字体：自动保留原样', ''));
-  const groups = new Map();
-  for (const font of state.fonts) {
-    let group = groups.get(font.family);
-    if (!group) {
-      group = document.createElement('optgroup');
-      group.label = font.family;
-      groups.set(font.family, group);
-      fontSelect.append(group);
-    }
-    const option = new Option(font.variant, font.id);
-    option.style.fontFamily = `CompanyPreview${state.fonts.indexOf(font)}`;
-    group.append(option);
-  }
-  fontSelect.value = edit.fontId ?? '';
-  const applyFontPreview = () => {
-    const fontIndex = state.fonts.findIndex((font) => font.id === fontSelect.value);
-    input.style.fontFamily = fontIndex >= 0 ? `CompanyPreview${fontIndex}` : '';
-  };
-  fontSelect.addEventListener('change', () => {
-    setEdit(item.zIndex, { fontId: fontSelect.value || undefined });
-    applyFontPreview();
-  });
-  applyFontPreview();
+  const fontSelect = createLazyFontSelect(item, input);
 
   const alignGroup = document.createElement('div');
   alignGroup.className = 'align-group';
@@ -291,20 +411,20 @@ function buildItem(item) {
   ]) {
     const button = document.createElement('button');
     button.type = 'button';
+    button.dataset.mode = mode;
     button.textContent = label;
     button.title = `强制${label}对齐`;
     button.className = edit.alignmentMode === mode ? 'on' : '';
     button.addEventListener('click', () => {
       const current = state.edits.get(item.zIndex)?.alignmentMode;
       setEdit(item.zIndex, { alignmentMode: current === mode ? undefined : mode });
-      renderList();
     });
     alignGroup.append(button);
   }
 
   const extraToggle = document.createElement('button');
   extraToggle.type = 'button';
-  extraToggle.className = 'btn btn-ghost btn-sm';
+  extraToggle.className = 'btn btn-ghost btn-sm extra-toggle';
   extraToggle.textContent = edit.extraInstruction ? '调整说明 ✓' : '＋调整说明';
 
   const extra = document.createElement('input');
@@ -319,13 +439,65 @@ function buildItem(item) {
     if (!extra.classList.contains('hidden')) extra.focus();
   });
 
-  tools.append(fontSelect, alignGroup, extraToggle);
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'btn btn-ghost btn-sm item-reset';
+  reset.textContent = '撤销本条';
+  reset.title = '清除本条的新文案、字体、对齐和调整说明';
+  reset.disabled = Object.keys(edit).length === 0;
+  reset.addEventListener('click', () => resetItem(item.zIndex));
+
+  tools.append(fontSelect, alignGroup, extraToggle, reset);
   node.append(head, input, tools, extra);
   return node;
 }
 
+function syncItem(index) {
+  const node = el.elementList.querySelector(`.item[data-index="${index}"]`);
+  if (!node) return;
+  const edit = state.edits.get(index) ?? {};
+  node.classList.toggle('active', index === state.activeIndex);
+  node.classList.toggle('edited', hasEdit(index));
+  for (const button of node.querySelectorAll('.align-group button[data-mode]')) {
+    button.classList.toggle('on', edit.alignmentMode === button.dataset.mode);
+  }
+  const extra = node.querySelector('input.extra');
+  const extraToggle = node.querySelector('.extra-toggle');
+  if (extraToggle) extraToggle.textContent = edit.extraInstruction ? '调整说明 ✓' : '＋调整说明';
+  if (extra && !edit.extraInstruction && document.activeElement !== extra) extra.classList.add('hidden');
+  const reset = node.querySelector('.item-reset');
+  if (reset) reset.disabled = Object.keys(edit).length === 0;
+  node.querySelector('.font-select')?.refresh?.();
+}
+
+function resetItem(index) {
+  state.edits.delete(index);
+  const node = el.elementList.querySelector(`.item[data-index="${index}"]`);
+  if (node) {
+    const input = node.querySelector('textarea');
+    const extra = node.querySelector('input.extra');
+    if (input) input.value = '';
+    if (extra) {
+      extra.value = '';
+      extra.classList.add('hidden');
+    }
+  }
+  syncItem(index);
+  syncBoxClasses();
+  updateGenerateState();
+  scheduleDraftSave();
+  toast('已撤销本条修改', 'ok');
+}
+
 function focusItem(index, scroll = true) {
   state.activeIndex = index;
+  const item = state.elements.find((candidate) => candidate.zIndex === index);
+  if (item && !itemMatchesView(item)) {
+    state.elementFilter = 'all';
+    state.elementSearch = '';
+    el.elementSearch.value = '';
+    applyListView();
+  }
   syncBoxClasses();
   if (!scroll) return;
   const target = el.elementList.querySelector(`.item[data-index="${index}"]`);
@@ -364,9 +536,37 @@ function setEdit(index, patch) {
   for (const key of Object.keys(next)) if (next[key] === undefined || next[key] === '') delete next[key];
   if (Object.keys(next).length === 0) state.edits.delete(index);
   else state.edits.set(index, next);
+  syncItem(index);
   syncBoxClasses();
   updateGenerateState();
   scheduleDraftSave();
+}
+
+function applyFontToEdited() {
+  const targets = state.elements.filter((item) => hasEdit(item.zIndex));
+  if (!targets.length) return;
+  const fontId = el.batchFont.value || undefined;
+  for (const item of targets) {
+    const next = { ...(state.edits.get(item.zIndex) ?? {}) };
+    if (fontId) next.fontId = fontId;
+    else delete next.fontId;
+    state.edits.set(item.zIndex, next);
+    syncItem(item.zIndex);
+  }
+  syncBoxClasses();
+  updateGenerateState();
+  scheduleDraftSave();
+  const label = fontById(fontId)?.label ?? '自动保留原样';
+  toast(`已将 ${label} 应用到 ${targets.length} 个已修改项`, 'ok');
+}
+
+let searchDebounceTimer = null;
+function scheduleListSearch() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    state.elementSearch = compact(el.elementSearch.value);
+    applyListView();
+  }, 180);
 }
 
 let draftSaveTimer = null;
@@ -416,6 +616,7 @@ async function restoreLatestDraft() {
     el.preview.src = dataUrl;
     el.canvasInfo.textContent = `${draft.canvas.width} × ${draft.canvas.height} px`;
     el.listTitle.textContent = `识别到 ${state.elements.length} 处文字`;
+    resetListView();
     renderBoxes();
     renderList();
     updateGenerateState();
@@ -455,10 +656,13 @@ function updateGenerateState() {
   el.btnGenerate.disabled = count === 0;
   el.editCount.textContent = count === 0 ? '未改动' : `已改 ${count} 处`;
   el.editCount.className = `chip ${count === 0 ? 'chip-quiet' : 'chip-ok'}`;
+  el.generationSummary.textContent = count === 0 ? '尚未修改文案' : `准备生成 ${count} 处修改`;
+  updateGenerationMeta();
   el.generateHint.textContent = count === 0
     ? '输入新文案；输入“消除”可清除对应识别框'
     : `将提交 ${count} 处改动（“消除”会清除对应范围）`;
   renderChangeLog(changes);
+  applyListView();
 }
 
 function renderChangeLog(changes) {
@@ -687,6 +891,7 @@ function showFailure(message) {
 async function startNewPoster({ findLatest = false } = {}) {
   clearTimeout(state.pollTimer);
   clearTimeout(draftSaveTimer);
+  clearTimeout(searchDebounceTimer);
   let draftId = state.draftId;
   if (!draftId && findLatest) {
     try {
@@ -699,6 +904,9 @@ async function startNewPoster({ findLatest = false } = {}) {
 
   Object.assign(state, { imageDataUrl: null, draftId: null, canvas: null, elements: [], activeIndex: null, taskId: null });
   state.edits.clear();
+  state.elementFilter = 'all';
+  state.elementSearch = '';
+  el.elementSearch.value = '';
   el.fileInput.value = '';
   el.btnDownload.classList.add('hidden');
   el.btnNext.classList.add('hidden');
@@ -732,6 +940,22 @@ for (const type of ['dragleave', 'drop']) {
 el.dropzone.addEventListener('drop', (event) => handleFile(event.dataTransfer?.files?.[0]));
 
 el.btnGenerate.addEventListener('click', generate);
+el.btnZoom.addEventListener('click', () => el.preview.click());
+el.elementSearch.addEventListener('input', scheduleListSearch);
+el.elementSearch.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  clearTimeout(searchDebounceTimer);
+  el.elementSearch.value = '';
+  state.elementSearch = '';
+  applyListView();
+});
+el.elementFilters.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-filter]');
+  if (!button) return;
+  state.elementFilter = button.dataset.filter;
+  applyListView();
+});
+el.btnApplyFont.addEventListener('click', applyFontToEdited);
 
 el.btnBack.addEventListener('click', () => {
   clearTimeout(state.pollTimer);

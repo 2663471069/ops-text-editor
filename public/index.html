@@ -35,10 +35,13 @@
           <div class="pane pane-image">
             <div class="pane-head">
               <span id="canvas-info" class="muted"></span>
-              <button id="btn-reset" class="btn btn-ghost btn-sm" type="button">换一张</button>
+              <div class="image-head-actions">
+                <button id="btn-zoom" class="btn btn-ghost btn-sm" type="button">放大查看</button>
+                <button id="btn-reset" class="btn btn-ghost btn-sm" type="button">换一张</button>
+              </div>
             </div>
             <div id="image-wrap" class="image-wrap">
-              <img id="preview" alt="海报预览" />
+              <img id="preview" alt="海报预览" data-zoomable="true" />
               <div id="overlay" class="overlay"></div>
             </div>
           </div>
@@ -51,12 +54,37 @@
                 <span id="edit-count" class="chip chip-quiet">未改动</span>
               </div>
             </div>
+            <div class="editor-toolbar">
+              <label class="editor-search" for="element-search">
+                <span aria-hidden="true">⌕</span>
+                <input id="element-search" type="search" placeholder="搜索原文或新文案" autocomplete="off" />
+              </label>
+              <div id="element-filters" class="filter-group" aria-label="文字筛选">
+                <button class="on" type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count">0</span></button>
+                <button type="button" data-filter="edited" aria-pressed="false">已修改 <span id="filter-edited-count">0</span></button>
+                <button type="button" data-filter="unedited" aria-pressed="false">未修改 <span id="filter-unedited-count">0</span></button>
+              </div>
+              <div class="batch-tools">
+                <select id="batch-font" title="批量设置已修改文案的公司字体">
+                  <option value="">批量字体：自动保留原样</option>
+                </select>
+                <button id="btn-apply-font" class="btn btn-ghost btn-sm" type="button" disabled>应用到已修改项</button>
+              </div>
+            </div>
             <div id="element-list" class="element-list"></div>
+            <div id="element-empty" class="element-empty hidden">
+              <strong>没有符合条件的文案</strong>
+              <span>尝试清除搜索或切换筛选条件</span>
+            </div>
             <details id="change-log" class="change-log hidden" open>
               <summary>本次修改记录 <span id="change-log-count" class="chip chip-ok">0</span></summary>
               <div id="change-log-list" class="change-log-list"></div>
             </details>
             <div class="pane-foot">
+              <div class="generation-summary">
+                <strong id="generation-summary">尚未修改文案</strong>
+                <span id="generation-meta" class="muted small">正在读取出图方式…</span>
+              </div>
               <button id="btn-generate" class="btn btn-primary" type="button" disabled>生成修改后的图</button>
               <p id="generate-hint" class="muted small">输入新文案；输入“消除”可清除对应识别框</p>
             </div>
