@@ -78,6 +78,11 @@ test('Codex 出图渠道已注册，提示词保留结构化替换与输出路�
   assert.match(prompt, /C:\\jobs\\result\.jpg/);
   assert.match(prompt, /SERVER_LAYOUT_GUIDANCE/);
   assert.match(prompt, /严格保持原图排版/);
+  assert.match(prompt, /STYLE LOCK \(mandatory\)/);
+  assert.match(prompt, /SIZE LOCK \(mandatory\)/);
+  assert.match(prompt, /COLOR LOCK \(mandatory\)/);
+  assert.match(prompt, /preserve the original font appearance\/typeface/);
+  assert.match(prompt, /Never enlarge shorter replacement text/);
 });
 
 test('Codex 清除操作会恢复识别框背景且绝不绘制指令词', () => {
