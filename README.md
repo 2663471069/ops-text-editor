@@ -30,7 +30,7 @@ node test/ocr-probe.mjs       # 用测试海报打一次真实 OCR，验证密�
 | 需要密钥 | 不需要项目密钥；需已登录 Codex | 否 | 需要图像编辑 API Key |
 | 费用 | 消耗 Codex 使用额度 | 无 | 按 API 次数计费 |
 | 复杂背景 | 自然 | **可能留下痕迹** | 自然 |
-| 典型耗时 | 2–5 分钟 | 数秒 | 取决于供应商 |
+| 典型耗时 | 5–15 分钟 | 数秒 | 取决于供应商 |
 | 原理 | 本机 Codex 调用内置 imagegen | 盖掉旧字并重画 | 调用 `/images/edits` |
 
 在「设置 → 出图方式」里切换，代码不用改。
@@ -46,6 +46,7 @@ server/
   prompt.js       提示词拼装
   queue.js        并发槽位
   task-store.js   任务存储（含归属校验）
+  workspace-store.js  草稿、原图和生成记录持久化
   ocr/            codex / aliyun / tencent / baidu / mock
   image/          codex（Codex 生图）/ local（本地合成）/ openai（API 出图）/ codec / probe
 .agents/skills/   项目内 poster-text-edit Codex 技能
@@ -60,6 +61,8 @@ test/             单元测试 + 端到端 + 渲染检查
 - `POST /ocr/detect` — `{imageBase64}` → `{elements[], canvas, rawCount}`
 - `POST /ocr/generate` — `{imageBase64, changes[]}` → `{taskId, traceId}`
 - `GET /ocr/task/:taskId` — `processing` / `completed` / `failed`
+- `GET|PUT|DELETE /drafts/...` — 自动保存、恢复和删除当前草稿
+- `GET|DELETE /history/...` — 生成记录、前后对比、下载与继续编辑
 - `GET|PUT /ocr-text-edit/config`、`POST /ocr-text-edit/config/test`
 - `GET|PUT /product-showcase/prompts`
 
@@ -100,3 +103,9 @@ test/             单元测试 + 端到端 + 渲染检查
 
 Codex 生图后台最多等待 25 分钟，页面最多等待 27 分钟。复杂的高分辨率商品图可能需要 5–15 分钟；任务完成或失败的耗时与错误会写入 `data/task-events.log`，不记录图片和修改文案。
 生成页面会显示已等待时间和预计剩余区间。成功样本不足 3 次时采用保守的 5–15 分钟范围；积累更多本机任务后，会根据最近 200 次 Codex 成功记录自动校准，进度条仅代表时间参考而非模型内部真实进度。
+
+## 自动保存与生成记录
+
+- 识别完成后自动建立草稿；输入文案后约 0.7 秒自动保存，刷新页面会恢复原图、识别框和未生成的修改。
+- 每次点击生成都会建立一条记录；成功后可在顶部「生成记录」中查看前后对比、下载结果或继续编辑。
+- 草稿和记录保存在 `data/workspace/`，不会上传到 GitHub。生成记录默认最多 50 条并保留 30 天，也可在页面中手动删除。

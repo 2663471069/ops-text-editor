@@ -2,6 +2,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { parseGenerateRequest, parseDetectRequest, parseImageDataUrl } from '../server/validate.js';
 import { buildTextEditorPrompt, formatChange, validateTemplate, normalizeText, DEFAULT_TEMPLATE } from '../server/prompt.js';
@@ -13,6 +16,7 @@ import { normalizeElements, polygonToBox, mergeSameLine } from '../server/ocr/in
 import { buildCodexPrompt, DEFAULT_CODEX_IMAGE_TIMEOUT_MS } from '../server/image/codex.js';
 import { buildCodexOcrPrompt } from '../server/ocr/codex.js';
 import { IMAGE_PROVIDERS, OCR_PROVIDERS } from '../server/config.js';
+import { createWorkspaceStore } from '../server/workspace-store.js';
 
 // 1x1 白色 PNG
 const PNG_1X1 =
@@ -285,6 +289,93 @@ test('任务公开状态包含失败时间和耗时，便于定位长任务超�
   const view = store.toPublic(task);
   assert.equal(view.failedAt, 6_500);
   assert.equal(view.elapsedMs, 5_500);
+});
+
+// ---------- 草稿与生成记录 ----------
+
+test('草稿可持久化、恢复编辑并按用户隔离', async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'poster-draft-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const store = createWorkspaceStore({ dataDir });
+  const owner = '11111111-1111-4111-8111-111111111111';
+  const other = '22222222-2222-4222-8222-222222222222';
+  const image = Buffer.from(PNG_1X1.split(',')[1], 'base64');
+  const draft = await store.createDraft({
+    ownerId: owner,
+    imageBuffer: image,
+    mime: 'image/png',
+    canvas: { width: 1, height: 1 },
+    elements: [{ zIndex: 0, text: '旧文案', x: 0, y: 0, w: 1, h: 1 }],
+  });
+  await store.saveDraft(owner, draft.id, [{ index: 0, modified: '新文案', alignmentMode: 'center' }]);
+  const restored = await store.getDraft(owner, draft.id);
+  assert.equal(restored.edits[0].modified, '新文案');
+  assert.equal(await store.getDraft(other, draft.id), null);
+  const asset = await store.draftImage(owner, draft.id);
+  assert.deepEqual(await readFile(asset.file), image);
+});
+
+test('生成结果落盘后可列出、查看、恢复和删除', async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'poster-history-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  let clock = 10_000;
+  const store = createWorkspaceStore({ dataDir, now: () => clock });
+  const owner = '33333333-3333-4333-8333-333333333333';
+  const image = Buffer.from(PNG_1X1.split(',')[1], 'base64');
+  const draft = await store.createDraft({
+    ownerId: owner,
+    imageBuffer: image,
+    mime: 'image/png',
+    canvas: { width: 1, height: 1 },
+    elements: [{ zIndex: 0, text: 'A', x: 0, y: 0, w: 1, h: 1 }],
+    edits: [{ index: 0, modified: 'B' }],
+  });
+  const started = await store.startHistory({
+    ownerId: owner,
+    taskId: 'task-1',
+    draftId: draft.id,
+    imageBuffer: image,
+    mime: 'image/png',
+    canvas: { width: 1, height: 1 },
+    changes: [{ original: 'A', modified: 'B', box: { x: 0, y: 0, w: 1, h: 1 } }],
+    provider: 'codex',
+  });
+  clock = 15_000;
+  const completed = await store.completeHistory(owner, started.id, PNG_1X1, 5_000);
+  assert.equal(completed.status, 'completed');
+  assert.match(completed.resultUrl, /\/api\/history\/.+\/result$/);
+  assert.equal((await store.listHistory(owner))[0].elapsedMs, 5_000);
+  assert.equal((await store.getHistory(owner, started.id)).changes[0].modified, 'B');
+  const result = await store.historyImage(owner, started.id, 'result');
+  assert.deepEqual(await readFile(result.file), image);
+  const recreated = await store.restoreHistory(owner, started.id);
+  assert.equal(recreated.edits[0].modified, 'B');
+  assert.equal(await store.deleteHistory(owner, started.id), true);
+  assert.equal(await store.getHistory(owner, started.id), null);
+});
+
+test('服务重启会把遗留的生成中记录标记为中断失败', async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'poster-interrupted-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  let clock = 20_000;
+  const store = createWorkspaceStore({ dataDir, now: () => clock });
+  const owner = '44444444-4444-4444-8444-444444444444';
+  const image = Buffer.from(PNG_1X1.split(',')[1], 'base64');
+  const started = await store.startHistory({
+    ownerId: owner,
+    taskId: 'task-interrupted',
+    imageBuffer: image,
+    mime: 'image/png',
+    canvas: { width: 1, height: 1 },
+    changes: [{ original: 'A', modified: 'B' }],
+    provider: 'codex',
+  });
+  clock = 25_000;
+  assert.equal(await store.markInterruptedHistory(), 1);
+  const record = await store.getHistory(owner, started.id);
+  assert.equal(record.status, 'failed');
+  assert.match(record.error, /服务重启|任务中断/);
+  assert.equal(record.elapsedMs, 5_000);
 });
 
 test('出图样本不足时使用保守的 5–15 分钟预计区间', () => {

@@ -131,5 +131,13 @@ export function parseGenerateRequest(body = {}) {
 
   if (!changes && !prompt) return { error: '缺少提示词或文字变更' };
 
-  return { image, prompt, changes, action: '文案修改' };
+  let draftId = null;
+  if (body.draftId !== undefined && body.draftId !== null && body.draftId !== '') {
+    draftId = String(body.draftId);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(draftId)) {
+      return { error: 'draftId 格式无效' };
+    }
+  }
+
+  return { image, prompt, changes, draftId, action: '文案修改' };
 }

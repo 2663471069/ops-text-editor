@@ -11,6 +11,7 @@
       <h1>海报文案修改</h1>
       <div class="topbar-right">
         <span id="status-chip" class="chip">检查中…</span>
+        <a class="link" href="history.html">生成记录</a>
         <a class="link" href="config.html">设置</a>
       </div>
     </header>
@@ -45,7 +46,10 @@
           <div class="pane pane-list">
             <div class="pane-head">
               <span id="list-title">识别到的文字</span>
-              <span id="edit-count" class="chip chip-quiet">未改动</span>
+              <div class="pane-head-status">
+                <span id="draft-status" class="muted small">等待编辑</span>
+                <span id="edit-count" class="chip chip-quiet">未改动</span>
+              </div>
             </div>
             <div id="element-list" class="element-list"></div>
             <div class="pane-foot">

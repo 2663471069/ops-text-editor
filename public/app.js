@@ -9,6 +9,7 @@ const POLL_TIMEOUT_MS = 27 * 60 * 1000;
 
 const state = {
   imageDataUrl: null,
+  draftId: null,
   canvas: null, // {width, height}
   elements: [], // 后端返回的原始识别结果
   edits: new Map(), // zIndex -> {modified, alignmentMode, extraInstruction}
@@ -43,6 +44,7 @@ const el = {
   resultTitle: $('result-title'),
   resultBody: $('result-body'),
   toast: $('toast'),
+  draftStatus: $('draft-status'),
 };
 
 // ---------- 小工具 ----------
@@ -91,6 +93,12 @@ function readFileAsDataUrl(file) {
   });
 }
 
+async function imageUrlAsDataUrl(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('读取已保存的草稿图片失败');
+  return readFileAsDataUrl(await response.blob());
+}
+
 // ---------- 启动：查服务状态 ----------
 
 async function refreshStatus() {
@@ -134,6 +142,7 @@ async function handleFile(file) {
     state.imageDataUrl = dataUrl;
     state.canvas = data.canvas;
     state.elements = data.elements;
+    state.draftId = data.draftId;
     state.edits.clear();
     state.activeIndex = null;
 
@@ -149,6 +158,7 @@ async function handleFile(file) {
     renderList();
     updateGenerateState();
     showStage('edit');
+    setDraftStatus('已自动保存', 'ok');
   } catch (error) {
     toast(error.message);
   } finally {
@@ -306,6 +316,64 @@ function setEdit(index, patch) {
   else state.edits.set(index, next);
   syncBoxClasses();
   updateGenerateState();
+  scheduleDraftSave();
+}
+
+let draftSaveTimer = null;
+function setDraftStatus(message, kind = '') {
+  if (!el.draftStatus) return;
+  el.draftStatus.textContent = message;
+  el.draftStatus.className = `small draft-status${kind ? ` ${kind}` : ''}`;
+}
+
+function serializedEdits() {
+  return [...state.edits.entries()].map(([index, edit]) => ({ index, ...edit }));
+}
+
+function scheduleDraftSave() {
+  if (!state.draftId) return;
+  clearTimeout(draftSaveTimer);
+  setDraftStatus('保存中…');
+  draftSaveTimer = setTimeout(saveDraft, 700);
+}
+
+async function saveDraft() {
+  if (!state.draftId) return;
+  const draftId = state.draftId;
+  try {
+    await api(`/api/drafts/${encodeURIComponent(draftId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ edits: serializedEdits() }),
+    });
+    if (state.draftId === draftId) setDraftStatus('已自动保存', 'ok');
+  } catch (error) {
+    setDraftStatus('保存失败', 'error');
+    toast(`草稿保存失败：${error.message}`);
+  }
+}
+
+async function restoreLatestDraft() {
+  try {
+    const { draft } = await api('/api/drafts/latest');
+    if (!draft) return;
+    const dataUrl = await imageUrlAsDataUrl(draft.imageUrl);
+    state.imageDataUrl = dataUrl;
+    state.draftId = draft.id;
+    state.canvas = draft.canvas;
+    state.elements = draft.elements;
+    state.edits = new Map((draft.edits ?? []).map(({ index, ...edit }) => [Number(index), edit]));
+    state.activeIndex = null;
+    el.preview.src = dataUrl;
+    el.canvasInfo.textContent = `${draft.canvas.width} × ${draft.canvas.height} px`;
+    el.listTitle.textContent = `识别到 ${state.elements.length} 处文字`;
+    renderBoxes();
+    renderList();
+    updateGenerateState();
+    showStage('edit');
+    setDraftStatus('已恢复并自动保存', 'ok');
+  } catch (error) {
+    console.warn('[draft] 恢复失败:', error.message);
+  }
 }
 
 function collectChanges() {
@@ -341,6 +409,8 @@ async function generate() {
   const changes = collectChanges();
   if (!changes.length) return;
 
+  clearTimeout(draftSaveTimer);
+  await saveDraft();
   el.btnGenerate.disabled = true;
   showStage('result');
   el.resultTitle.textContent = '正在生成…';
@@ -350,7 +420,7 @@ async function generate() {
   try {
     const { taskId } = await api('/api/ocr/generate', {
       method: 'POST',
-      body: JSON.stringify({ imageBase64: state.imageDataUrl, changes }),
+      body: JSON.stringify({ imageBase64: state.imageDataUrl, changes, draftId: state.draftId }),
     });
     state.taskId = taskId;
     state.pollErrors = 0;
@@ -489,6 +559,7 @@ function showSuccess(body) {
 
   el.btnDownload.href = url;
   el.btnDownload.classList.remove('hidden');
+  setDraftStatus('已生成并保存到记录', 'ok');
   toast('生成完成', 'ok');
 }
 
@@ -528,12 +599,22 @@ el.btnBack.addEventListener('click', () => {
   showStage('edit');
 });
 
-el.btnReset.addEventListener('click', () => {
+el.btnReset.addEventListener('click', async () => {
   clearTimeout(state.pollTimer);
-  Object.assign(state, { imageDataUrl: null, canvas: null, elements: [], activeIndex: null, taskId: null });
+  clearTimeout(draftSaveTimer);
+  const draftId = state.draftId;
+  Object.assign(state, { imageDataUrl: null, draftId: null, canvas: null, elements: [], activeIndex: null, taskId: null });
   state.edits.clear();
   el.fileInput.value = '';
   showStage('upload');
+  if (draftId) {
+    try {
+      await api(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' });
+    } catch (error) {
+      console.warn('[draft] 删除失败:', error.message);
+    }
+  }
 });
 
 refreshStatus();
+restoreLatestDraft();

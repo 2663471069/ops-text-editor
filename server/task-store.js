@@ -52,12 +52,13 @@ export function createTaskStore({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now()
     return task;
   }
 
-  function complete(id, data, { resultMode = 'url' } = {}) {
+  function complete(id, data, { resultMode = 'url', historyId = null } = {}) {
     const task = tasks.get(String(id));
     if (!task || task.status !== 'processing') return null;
     task.status = 'completed';
     task.data = Array.isArray(data) ? data : [data];
     task.resultMode = resultMode;
+    task.historyId = historyId;
     task.completedAt = now();
     return task;
   }
@@ -80,6 +81,7 @@ export function createTaskStore({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now()
       error: task.error,
       traceId: task.traceId,
       resultMode: task.resultMode,
+      historyId: task.historyId ?? null,
       createdAt: task.createdAt,
       completedAt: task.completedAt,
       failedAt: task.failedAt,

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import * as configStore from './config.js';
 import { createQueue } from './queue.js';
 import { createTaskStore } from './task-store.js';
+import { createWorkspaceStore, workspaceLimits } from './workspace-store.js';
 import { estimateDurationRange, parseCompletedCodexDurations } from './task-metrics.js';
 import { parseDetectRequest, parseGenerateRequest, LIMITS } from './validate.js';
 import { buildTextEditorPrompt, validateTemplate, DEFAULT_TEMPLATE } from './prompt.js';
@@ -31,6 +32,10 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '25mb' })); // base64 图片体积上限由 validate.js 精确把关
 
 const taskStore = createTaskStore();
+const workspaceStore = createWorkspaceStore({ dataDir: configStore.paths.DATA_DIR });
+workspaceStore.markInterruptedHistory().then((count) => {
+  if (count) console.log(`[history] 已将 ${count} 条中断任务标记为失败`);
+}).catch((error) => console.error('[history] 恢复中断任务状态失败:', error.message));
 const limits = configStore.load().limits;
 const queue = createQueue({ perUser: limits.perUser, globalMax: limits.globalMax });
 let completedCodexDurations = [];
@@ -156,12 +161,21 @@ app.post('/api/ocr/detect', async (req, res, next) => {
       excludeRects: parsed.excludeRects,
     });
 
+    const draft = await workspaceStore.createDraft({
+      ownerId: req.user.id,
+      imageBuffer: parsed.image.buffer,
+      mime: parsed.image.mime,
+      canvas: result.canvas,
+      elements: result.elements,
+    });
+
     return ok(res, {
       data: {
         elements: result.elements,
         canvas: result.canvas,
         rawCount: result.rawCount,
         provider: result.provider,
+        draftId: draft.id,
       },
     });
   } catch (error) {
@@ -201,6 +215,7 @@ app.post('/api/ocr/generate', async (req, res, next) => {
     if (!slot) return fail(res, 429, '并发任务已满，请稍后再试');
 
     let task;
+    let history;
     try {
       task = taskStore.create({
         ownerId: req.user.id,
@@ -209,12 +224,22 @@ app.post('/api/ocr/generate', async (req, res, next) => {
         inputImageRef: `${parsed.image.mime}:${parsed.image.buffer.length}B`,
         meta: { provider, canvas },
       });
+      history = await workspaceStore.startHistory({
+        ownerId: req.user.id,
+        taskId: task.id,
+        draftId: parsed.draftId,
+        imageBuffer: parsed.image.buffer,
+        mime: parsed.image.mime,
+        canvas,
+        changes,
+        provider,
+      });
     } catch (error) {
       slot.release(); // 建任务失败也必须放掉槽位
       return next(error);
     }
 
-    ok(res, { taskId: task.id, traceId: task.traceId });
+    ok(res, { taskId: task.id, traceId: task.traceId, historyId: history.id });
 
     // 后台执行，所有异常路径都释放槽位
     (async () => {
@@ -226,12 +251,23 @@ app.post('/api/ocr/generate', async (req, res, next) => {
           changes,
           credentials: secrets.image,
         });
-        const completed = taskStore.complete(task.id, out.data, { resultMode: out.resultMode });
+        const saved = await workspaceStore.completeHistory(
+          req.user.id,
+          history.id,
+          out.data?.[0],
+          Date.now() - task.createdAt,
+        );
+        const resultUrl = saved?.resultUrl ?? out.data?.[0];
+        const completed = taskStore.complete(task.id, [resultUrl], {
+          resultMode: saved?.resultUrl ? 'url' : out.resultMode,
+          historyId: history.id,
+        });
         await recordTaskEvent(completed, { status: 'completed', provider });
         if (out.notes?.length) console.log(`[task ${task.id}] ${out.notes.join(' / ')}`);
       } catch (error) {
         console.error(`[task ${task.id}] 失败:`, error.message);
         const failed = taskStore.fail(task.id, error.message || '任务执行失败');
+        await workspaceStore.failHistory(req.user.id, history.id, error.message, Date.now() - task.createdAt);
         await recordTaskEvent(failed, { status: 'failed', provider, error });
       } finally {
         slot.release();
@@ -247,6 +283,104 @@ app.get('/api/ocr/task/:taskId', (req, res) => {
   const task = taskStore.get(req.params.taskId, req.user.id);
   if (!task) return fail(res, 404, '任务不存在');
   return res.json(taskStore.toPublic(task));
+});
+
+// ---------- 自动保存草稿 ----------
+
+app.get('/api/drafts/latest', async (req, res, next) => {
+  try {
+    const draft = await workspaceStore.getDraft(req.user.id);
+    return ok(res, { draft });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.put('/api/drafts/:draftId', async (req, res, next) => {
+  try {
+    const draft = await workspaceStore.saveDraft(req.user.id, req.params.draftId, req.body?.edits ?? []);
+    if (!draft) return fail(res, 404, '草稿不存在');
+    return ok(res, { draft });
+  } catch (error) {
+    error.statusCode = error.statusCode ?? 400;
+    return next(error);
+  }
+});
+
+app.delete('/api/drafts/:draftId', async (req, res, next) => {
+  try {
+    const deleted = await workspaceStore.deleteDraft(req.user.id, req.params.draftId);
+    if (!deleted) return fail(res, 404, '草稿不存在');
+    return ok(res, { deleted: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/drafts/:draftId/image', async (req, res, next) => {
+  try {
+    const asset = await workspaceStore.draftImage(req.user.id, req.params.draftId);
+    if (!asset) return fail(res, 404, '草稿图片不存在');
+    res.type(asset.mime);
+    res.set('Cache-Control', 'private, max-age=3600');
+    return res.sendFile(asset.file);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ---------- 生成记录 ----------
+
+app.get('/api/history', async (req, res, next) => {
+  try {
+    return ok(res, { records: await workspaceStore.listHistory(req.user.id), limits: workspaceLimits });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/history/:historyId', async (req, res, next) => {
+  try {
+    const record = await workspaceStore.getHistory(req.user.id, req.params.historyId);
+    if (!record) return fail(res, 404, '生成记录不存在');
+    return ok(res, { record });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+for (const kind of ['original', 'result']) {
+  app.get(`/api/history/:historyId/${kind}`, async (req, res, next) => {
+    try {
+      const asset = await workspaceStore.historyImage(req.user.id, req.params.historyId, kind);
+      if (!asset) return fail(res, 404, '记录图片不存在');
+      res.type(asset.mime);
+      res.set('Cache-Control', 'private, max-age=3600');
+      return res.sendFile(asset.file);
+    } catch (error) {
+      return next(error);
+    }
+  });
+}
+
+app.post('/api/history/:historyId/restore', async (req, res, next) => {
+  try {
+    const draft = await workspaceStore.restoreHistory(req.user.id, req.params.historyId);
+    if (!draft) return fail(res, 409, '这条记录缺少识别数据，无法继续编辑');
+    return ok(res, { draft });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.delete('/api/history/:historyId', async (req, res, next) => {
+  try {
+    const deleted = await workspaceStore.deleteHistory(req.user.id, req.params.historyId);
+    if (!deleted) return fail(res, 404, '生成记录不存在');
+    return ok(res, { deleted: true });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 // ---------- 配置 ----------
