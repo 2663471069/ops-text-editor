@@ -7,6 +7,7 @@ const POLL_INTERVAL_MS = 1500;
 // 后台 Codex 最长运行 25 分钟；页面多留 2 分钟，确保能读到后台的最终成功/失败状态。
 const POLL_TIMEOUT_MS = 27 * 60 * 1000;
 const REMOVAL_KEYWORDS = new Set(['消除', '删除', '去除', '清除']);
+const DROPZONE_DEFAULT_TITLE = '把海报拖进来、点击选择或直接粘贴';
 
 const state = {
   imageDataUrl: null,
@@ -204,6 +205,7 @@ async function handleFile(file) {
     return;
   }
 
+  el.dropzone.classList.add('processing');
   el.dropzone.querySelector('.dropzone-title').textContent = '识别中…';
   try {
     const dataUrl = await readFileAsDataUrl(file);
@@ -236,8 +238,57 @@ async function handleFile(file) {
   } catch (error) {
     toast(error.message);
   } finally {
-    el.dropzone.querySelector('.dropzone-title').textContent = '把海报拖进来，或点击选择';
+    el.dropzone.classList.remove('processing');
+    el.dropzone.querySelector('.dropzone-title').textContent = DROPZONE_DEFAULT_TITLE;
   }
+}
+
+function clipboardImage(clipboardData) {
+  const files = [...(clipboardData?.files ?? [])];
+  const direct = files.find((file) => /^image\//i.test(file.type));
+  if (direct) return direct;
+  for (const item of clipboardData?.items ?? []) {
+    if (item.kind !== 'file' || !/^image\//i.test(item.type)) continue;
+    const file = item.getAsFile();
+    if (file) return file;
+  }
+  return null;
+}
+
+function isTextEditingTarget(target) {
+  return target instanceof HTMLElement && (
+    target.isContentEditable ||
+    target.matches('input, textarea, select')
+  );
+}
+
+async function handlePaste(event) {
+  const file = clipboardImage(event.clipboardData);
+  if (!file || isTextEditingTarget(event.target)) return;
+  event.preventDefault();
+
+  if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) {
+    toast('剪贴板图片格式不支持，请使用 JPG、PNG 或 WebP');
+    return;
+  }
+  if (file.size > 12 * 1024 * 1024) {
+    toast('剪贴板图片超过 12MB');
+    return;
+  }
+
+  const generationRunning = !el.stageResult.classList.contains('hidden') && el.btnNext.classList.contains('hidden');
+  if (generationRunning) {
+    toast('当前图片正在生成，请等待完成后再粘贴下一张');
+    return;
+  }
+
+  if (state.imageDataUrl) {
+    const confirmed = window.confirm('粘贴新图片会结束当前编辑并切换到新图片，已生成的历史记录不会删除。是否继续？');
+    if (!confirmed) return;
+    await startNewPoster();
+  }
+
+  await handleFile(file);
 }
 
 // ---------- 渲染 ----------
@@ -924,6 +975,7 @@ async function startNewPoster({ findLatest = false } = {}) {
 // ---------- 事件绑定 ----------
 
 el.fileInput.addEventListener('change', (event) => handleFile(event.target.files?.[0]));
+document.addEventListener('paste', handlePaste);
 
 for (const type of ['dragenter', 'dragover']) {
   el.dropzone.addEventListener(type, (event) => {
