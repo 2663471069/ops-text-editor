@@ -6,6 +6,27 @@ const SYNC_TIMEOUT_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
+function requestSignal(signal, timeoutMs) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function wait(milliseconds, signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('任务已取消'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error('任务已取消'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+}
+
 function joinUrl(baseUrl, pathname) {
   return `${String(baseUrl).replace(/\/+$/, '')}/${pathname.replace(/^\/+/, '')}`;
 }
@@ -36,12 +57,11 @@ function extractResults(payload) {
 async function pollTask({ baseUrl, apiKey, taskId, signal }) {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (signal?.aborted) throw new Error('任务已取消');
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    await wait(POLL_INTERVAL_MS, signal);
 
     const response = await fetch(joinUrl(baseUrl, `images/tasks/${encodeURIComponent(taskId)}`), {
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(30_000),
+      signal: requestSignal(signal, 30_000),
     });
     if (!response.ok) throw await readError(response, '查询供应商任务');
 
@@ -63,7 +83,7 @@ async function pollTask({ baseUrl, apiKey, taskId, signal }) {
  * @param {{imageBuffer:Buffer, mime:string, prompt:string, credentials:object, size?:string}} input
  * @returns {Promise<{results:Array<{kind:string,value:string}>}>}
  */
-export async function render({ imageBuffer, mime, prompt, credentials, size }) {
+export async function render({ imageBuffer, mime, prompt, credentials, size, signal }) {
   const { baseUrl, apiKey, model, endpointMode = 'edits', quality = 'high' } = credentials ?? {};
   if (!baseUrl) {
     const err = new Error('未配置图像 API 地址');
@@ -85,7 +105,7 @@ export async function render({ imageBuffer, mime, prompt, credentials, size }) {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, prompt, size, quality, n: 1 }),
-      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+      signal: requestSignal(signal, SYNC_TIMEOUT_MS),
     });
   } else {
     const form = new FormData();
@@ -101,7 +121,7 @@ export async function render({ imageBuffer, mime, prompt, credentials, size }) {
       method: 'POST',
       headers,
       body: form,
-      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+      signal: requestSignal(signal, SYNC_TIMEOUT_MS),
     });
   }
 
@@ -114,7 +134,7 @@ export async function render({ imageBuffer, mime, prompt, credentials, size }) {
 
   const taskId = body.task_id ?? body.taskId ?? body.id;
   if (taskId) {
-    return { results: await pollTask({ baseUrl, apiKey, taskId }) };
+    return { results: await pollTask({ baseUrl, apiKey, taskId, signal }) };
   }
 
   throw new Error('供应商既未返回图片也未返回任务号');

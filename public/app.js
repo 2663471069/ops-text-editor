@@ -17,7 +17,9 @@ const state = {
   edits: new Map(), // zIndex -> {modified, alignmentMode, extraInstruction}
   activeIndex: null,
   taskId: null,
+  canceling: false,
   pollTimer: null,
+  pollDeadline: null,
   pollErrors: 0,
   imageProvider: null,
   imageEstimate: { minMs: 5 * 60 * 1000, maxMs: 15 * 60 * 1000, samples: 0 },
@@ -59,6 +61,7 @@ const el = {
   generateHint: $('generate-hint'),
   btnReset: $('btn-reset'),
   btnBack: $('btn-back'),
+  btnCancel: $('btn-cancel'),
   btnNext: $('btn-next'),
   btnDownload: $('btn-download'),
   resultTitle: $('result-title'),
@@ -276,7 +279,7 @@ async function handlePaste(event) {
     return;
   }
 
-  const generationRunning = !el.stageResult.classList.contains('hidden') && el.btnNext.classList.contains('hidden');
+  const generationRunning = Boolean(state.taskId);
   if (generationRunning) {
     toast('当前图片正在生成，请等待完成后再粘贴下一张');
     return;
@@ -758,6 +761,10 @@ async function generate() {
   el.resultTitle.textContent = '正在生成…';
   el.btnDownload.classList.add('hidden');
   el.btnNext.classList.add('hidden');
+  el.btnCancel.classList.remove('hidden');
+  el.btnCancel.disabled = true;
+  el.btnCancel.textContent = '取消生成';
+  el.btnBack.disabled = true;
   updateGenerationProgress({ message: '提交中…', elapsedMs: 0 });
 
   try {
@@ -766,12 +773,15 @@ async function generate() {
       body: JSON.stringify({ imageBase64: state.imageDataUrl, changes, draftId: state.draftId }),
     });
     state.taskId = taskId;
+    state.canceling = false;
     state.pollErrors = 0;
+    state.pollDeadline = Date.now() + POLL_TIMEOUT_MS;
+    el.btnCancel.disabled = false;
     updateGenerationProgress({
       message: state.imageProvider === 'codex' ? 'Codex 正在编辑海报…' : '已排队，等待处理…',
       elapsedMs: 0,
     });
-    pollTask(taskId, Date.now() + POLL_TIMEOUT_MS);
+    pollTask(taskId, state.pollDeadline);
   } catch (error) {
     showFailure(error.message);
   } finally {
@@ -858,6 +868,7 @@ function pollTask(taskId, deadline) {
       const body = await api(`/api/ocr/task/${encodeURIComponent(taskId)}`);
       if (body.status === 'completed') showSuccess(body);
       else if (body.status === 'failed') showFailure(body.error ?? '生成失败');
+      else if (body.status === 'cancelled') showCancelled(body);
       else if (Date.now() > deadline) {
         showFailure('页面等待超过 27 分钟，后台任务仍未结束');
       }
@@ -885,6 +896,11 @@ function pollTask(taskId, deadline) {
 
 function showSuccess(body) {
   clearTimeout(state.pollTimer);
+  state.taskId = null;
+  state.pollDeadline = null;
+  state.canceling = false;
+  el.btnCancel.classList.add('hidden');
+  el.btnBack.disabled = false;
   const url = body.data?.[0];
   if (!url) {
     showFailure('任务完成但没有返回图片');
@@ -930,6 +946,11 @@ function showSuccess(body) {
 
 function showFailure(message) {
   clearTimeout(state.pollTimer);
+  state.taskId = null;
+  state.pollDeadline = null;
+  state.canceling = false;
+  el.btnCancel.classList.add('hidden');
+  el.btnBack.disabled = false;
   el.resultTitle.textContent = '生成失败';
   const note = document.createElement('p');
   note.className = 'muted';
@@ -937,6 +958,58 @@ function showFailure(message) {
   el.resultBody.replaceChildren(note);
   el.btnNext.classList.remove('hidden');
   toast(message);
+}
+
+function showCancelled(body = {}) {
+  clearTimeout(state.pollTimer);
+  state.taskId = null;
+  state.pollDeadline = null;
+  state.canceling = false;
+  el.btnCancel.classList.add('hidden');
+  el.btnBack.disabled = false;
+  el.btnNext.classList.add('hidden');
+  el.resultTitle.textContent = '已取消生成';
+
+  const note = document.createElement('div');
+  note.className = 'generation-cancelled';
+  const title = document.createElement('strong');
+  title.textContent = `任务已停止（已运行 ${formatDuration(Number(body.elapsedMs) || 0)}）`;
+  const hint = document.createElement('p');
+  hint.className = 'muted';
+  hint.textContent = '不会继续生成或占用队列。可以返回继续修改后重新生成。';
+  note.append(title, hint);
+  el.resultBody.replaceChildren(note);
+  setDraftStatus('生成已取消，草稿仍已保存');
+  toast('已取消生成', 'ok');
+}
+
+async function cancelGeneration() {
+  const taskId = state.taskId;
+  if (!taskId || state.canceling) return;
+  if (!window.confirm('确定取消当前生成吗？已经等待的进度不会保留。')) return;
+
+  state.canceling = true;
+  clearTimeout(state.pollTimer);
+  el.btnCancel.disabled = true;
+  el.btnCancel.textContent = '取消中…';
+  updateGenerationProgress({
+    message: '正在停止生成任务…',
+    elapsedMs: POLL_TIMEOUT_MS - ((state.pollDeadline ?? Date.now()) - Date.now()),
+  });
+
+  try {
+    const body = await api(`/api/ocr/task/${encodeURIComponent(taskId)}/cancel`, {
+      method: 'POST',
+      body: '{}',
+    });
+    showCancelled(body);
+  } catch (error) {
+    state.canceling = false;
+    el.btnCancel.disabled = false;
+    el.btnCancel.textContent = '取消生成';
+    toast(`取消失败：${error.message}`);
+    if (state.taskId === taskId) pollTask(taskId, state.pollDeadline ?? (Date.now() + POLL_TIMEOUT_MS));
+  }
 }
 
 async function startNewPoster({ findLatest = false } = {}) {
@@ -953,7 +1026,16 @@ async function startNewPoster({ findLatest = false } = {}) {
     }
   }
 
-  Object.assign(state, { imageDataUrl: null, draftId: null, canvas: null, elements: [], activeIndex: null, taskId: null });
+  Object.assign(state, {
+    imageDataUrl: null,
+    draftId: null,
+    canvas: null,
+    elements: [],
+    activeIndex: null,
+    taskId: null,
+    canceling: false,
+    pollDeadline: null,
+  });
   state.edits.clear();
   state.elementFilter = 'all';
   state.elementSearch = '';
@@ -961,6 +1043,8 @@ async function startNewPoster({ findLatest = false } = {}) {
   el.fileInput.value = '';
   el.btnDownload.classList.add('hidden');
   el.btnNext.classList.add('hidden');
+  el.btnCancel.classList.add('hidden');
+  el.btnBack.disabled = false;
   showStage('upload');
 
   if (draftId) {
@@ -992,6 +1076,7 @@ for (const type of ['dragleave', 'drop']) {
 el.dropzone.addEventListener('drop', (event) => handleFile(event.dataTransfer?.files?.[0]));
 
 el.btnGenerate.addEventListener('click', generate);
+el.btnCancel.addEventListener('click', cancelGeneration);
 el.btnZoom.addEventListener('click', () => el.preview.click());
 el.elementSearch.addEventListener('input', scheduleListSearch);
 el.elementSearch.addEventListener('keydown', (event) => {
@@ -1010,8 +1095,11 @@ el.elementFilters.addEventListener('click', (event) => {
 el.btnApplyFont.addEventListener('click', applyFontToEdited);
 
 el.btnBack.addEventListener('click', () => {
+  if (state.taskId) {
+    toast('请先取消当前生成任务');
+    return;
+  }
   clearTimeout(state.pollTimer);
-  state.taskId = null;
   showStage('edit');
 });
 

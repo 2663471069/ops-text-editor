@@ -13,7 +13,7 @@ import { createQueue } from '../server/queue.js';
 import { createTaskStore } from '../server/task-store.js';
 import { DEFAULT_IMAGE_ESTIMATE, estimateDurationRange, parseCompletedCodexDurations } from '../server/task-metrics.js';
 import { normalizeElements, polygonToBox, mergeSameLine } from '../server/ocr/index.js';
-import { buildCodexPrompt, DEFAULT_CODEX_IMAGE_TIMEOUT_MS } from '../server/image/codex.js';
+import { buildCodexPrompt, DEFAULT_CODEX_IMAGE_TIMEOUT_MS, runCodex } from '../server/image/codex.js';
 import { buildCodexOcrPrompt } from '../server/ocr/codex.js';
 import { IMAGE_PROVIDERS, OCR_PROVIDERS } from '../server/config.js';
 import { createWorkspaceStore } from '../server/workspace-store.js';
@@ -105,6 +105,17 @@ test('Codex 清除操作会恢复识别框背景且绝不绘制指令词', () =>
 
 test('Codex 复杂图片允许最多运行 25 分钟', () => {
   assert.equal(DEFAULT_CODEX_IMAGE_TIMEOUT_MS, 25 * 60 * 1000);
+});
+
+test('Codex 出图在任务已取消时不会启动子进程', async () => {
+  const controller = new AbortController();
+  const reason = new Error('用户已取消生成');
+  reason.code = 'TASK_CANCELLED';
+  controller.abort(reason);
+  await assert.rejects(
+    runCodex({ executable: '不应执行.exe', cwd: '.', imagePath: 'input.png', prompt: 'p', signal: controller.signal }),
+    (error) => error.code === 'TASK_CANCELLED',
+  );
 });
 
 test('公司字体文件会识别字体族、字重和斜体', () => {
@@ -334,6 +345,21 @@ test('任务公开状态包含失败时间和耗时，便于定位长任务超�
   assert.equal(view.elapsedMs, 5_500);
 });
 
+test('任务可由所属用户取消，取消后不能再完成或失败', () => {
+  let clock = 2_000;
+  const store = createTaskStore({ now: () => clock });
+  const task = store.create({ ownerId: 'user-a', prompt: 'p' });
+  clock = 5_500;
+  assert.equal(store.cancel(task.id, 'user-b'), null, '其他用户不能取消任务');
+  const cancelled = store.cancel(task.id, 'user-a');
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(store.complete(task.id, ['https://x/result.jpg']), null);
+  assert.equal(store.fail(task.id, '来晚了'), null);
+  const view = store.toPublic(cancelled);
+  assert.equal(view.cancelledAt, 5_500);
+  assert.equal(view.elapsedMs, 3_500);
+});
+
 // ---------- 草稿与生成记录 ----------
 
 test('草稿可持久化、恢复编辑并按用户隔离', async (t) => {
@@ -398,6 +424,32 @@ test('生成结果落盘后可列出、查看、恢复和删除', async (t) => {
   assert.equal(recreated.edits[0].modified, 'B');
   assert.equal(await store.deleteHistory(owner, started.id), true);
   assert.equal(await store.getHistory(owner, started.id), null);
+});
+
+test('取消生成会保存取消状态和耗时，且不会再写入生成结果', async (t) => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'poster-cancelled-history-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  let clock = 30_000;
+  const store = createWorkspaceStore({ dataDir, now: () => clock });
+  const owner = '55555555-5555-4555-8555-555555555555';
+  const image = Buffer.from(PNG_1X1.split(',')[1], 'base64');
+  const started = await store.startHistory({
+    ownerId: owner,
+    taskId: '66666666-6666-4666-8666-666666666666',
+    imageBuffer: image,
+    mime: 'image/png',
+    canvas: { width: 1, height: 1 },
+    changes: [{ original: 'A', modified: 'B' }],
+    provider: 'codex',
+  });
+  clock = 34_500;
+  const cancelled = await store.cancelHistory(owner, started.id, 4_500);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.cancelledAt, 34_500);
+  assert.equal(cancelled.elapsedMs, 4_500);
+  assert.equal(cancelled.error, null);
+  assert.equal(await store.completeHistory(owner, started.id, PNG_1X1, 5_000), null);
+  assert.equal((await store.getHistory(owner, started.id)).resultUrl, null);
 });
 
 test('服务重启会把遗留的生成中记录标记为中断失败', async (t) => {

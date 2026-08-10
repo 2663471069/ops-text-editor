@@ -11,7 +11,8 @@ import { render as renderLocal } from './local.js';
 import { render as renderRemote } from './openai.js';
 import { render as renderCodex } from './codex.js';
 
-export async function generate({ provider, imageBuffer, prompt, changes, credentials }) {
+export async function generate({ provider, imageBuffer, prompt, changes, credentials, signal }) {
+  signal?.throwIfAborted();
   if (provider === 'local') {
     if (!Array.isArray(changes) || changes.length === 0) {
       const err = new Error('本地合成需要结构化的 changes（含坐标），请从识别结果提交');
@@ -19,6 +20,7 @@ export async function generate({ provider, imageBuffer, prompt, changes, credent
       throw err;
     }
     const out = await renderLocal({ imageBuffer, changes });
+    signal?.throwIfAborted();
     return {
       data: [toDataUrl(out.buffer, out.mime)],
       resultMode: 'dataUrl',
@@ -35,6 +37,7 @@ export async function generate({ provider, imageBuffer, prompt, changes, credent
       prompt,
       credentials,
       size: `${compressed.width}x${compressed.height}`,
+      signal,
     });
     return {
       data: results.map((r) => r.value),
@@ -44,7 +47,7 @@ export async function generate({ provider, imageBuffer, prompt, changes, credent
   }
 
   if (provider === 'codex') {
-    const out = await renderCodex({ imageBuffer, changes, prompt });
+    const out = await renderCodex({ imageBuffer, changes, prompt, signal });
     return {
       data: [toDataUrl(out.buffer, out.mime)],
       resultMode: 'dataUrl',

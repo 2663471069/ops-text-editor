@@ -103,6 +103,7 @@ function publicHistory(record, { detail = false } = {}) {
     createdAt: record.createdAt,
     completedAt: record.completedAt ?? null,
     failedAt: record.failedAt ?? null,
+    cancelledAt: record.cancelledAt ?? null,
     elapsedMs: record.elapsedMs ?? null,
     error: record.error ?? null,
     originalUrl: `/api/history/${record.id}/original`,
@@ -236,6 +237,7 @@ export function createWorkspaceStore({ dataDir, now = () => Date.now() }) {
       createdAt: now(),
       completedAt: null,
       failedAt: null,
+      cancelledAt: null,
       elapsedMs: null,
       error: null,
       resultFile: null,
@@ -257,7 +259,7 @@ export function createWorkspaceStore({ dataDir, now = () => Date.now() }) {
 
   async function completeHistory(ownerId, id, resultValue, elapsedMs) {
     const record = await loadHistoryRecord(ownerId, id);
-    if (!record) return null;
+    if (!record || record.status !== 'processing') return null;
     const match = typeof resultValue === 'string' ? DATA_URL.exec(resultValue) : null;
     if (match) {
       const mime = match[1].toLowerCase();
@@ -279,11 +281,22 @@ export function createWorkspaceStore({ dataDir, now = () => Date.now() }) {
 
   async function failHistory(ownerId, id, error, elapsedMs) {
     const record = await loadHistoryRecord(ownerId, id);
-    if (!record) return null;
+    if (!record || record.status !== 'processing') return null;
     record.status = 'failed';
     record.error = String(error || '生成失败').slice(0, 500);
     record.failedAt = now();
     record.elapsedMs = Number(elapsedMs) || record.failedAt - record.createdAt;
+    await writeJsonAtomic(path.join(recordDir(ownerId, id), 'record.json'), record);
+    return publicHistory(record, { detail: true });
+  }
+
+  async function cancelHistory(ownerId, id, elapsedMs) {
+    const record = await loadHistoryRecord(ownerId, id);
+    if (!record || record.status !== 'processing') return null;
+    record.status = 'cancelled';
+    record.error = null;
+    record.cancelledAt = now();
+    record.elapsedMs = Number(elapsedMs) || record.cancelledAt - record.createdAt;
     await writeJsonAtomic(path.join(recordDir(ownerId, id), 'record.json'), record);
     return publicHistory(record, { detail: true });
   }
@@ -371,6 +384,7 @@ export function createWorkspaceStore({ dataDir, now = () => Date.now() }) {
     startHistory,
     completeHistory,
     failHistory,
+    cancelHistory,
     listHistory,
     getHistory,
     historyImage,

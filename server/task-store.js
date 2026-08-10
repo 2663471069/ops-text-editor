@@ -16,7 +16,7 @@ export function createTaskStore({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now()
   function sweep() {
     const cutoff = now() - ttlMs;
     for (const [id, task] of tasks) {
-      const done = task.completedAt ?? task.failedAt;
+      const done = task.completedAt ?? task.failedAt ?? task.cancelledAt;
       if (done && done < cutoff) tasks.delete(id);
     }
   }
@@ -39,6 +39,7 @@ export function createTaskStore({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now()
       createdAt: now(),
       completedAt: null,
       failedAt: null,
+      cancelledAt: null,
     };
     tasks.set(task.id, task);
     return task;
@@ -72,9 +73,18 @@ export function createTaskStore({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now()
     return task;
   }
 
+  function cancel(id, ownerId, reason = '用户已取消') {
+    const task = get(id, ownerId);
+    if (!task || task.status !== 'processing') return null;
+    task.status = 'cancelled';
+    task.error = typeof reason === 'string' ? reason : (reason?.message ?? '用户已取消');
+    task.cancelledAt = now();
+    return task;
+  }
+
   /** 对外视图：不含 ownerId、prompt、meta 等内部字段。 */
   function toPublic(task) {
-    const endedAt = task.completedAt ?? task.failedAt;
+    const endedAt = task.completedAt ?? task.failedAt ?? task.cancelledAt;
     return {
       status: task.status,
       data: task.data,
@@ -85,9 +95,10 @@ export function createTaskStore({ ttlMs = DEFAULT_TTL_MS, now = () => Date.now()
       createdAt: task.createdAt,
       completedAt: task.completedAt,
       failedAt: task.failedAt,
+      cancelledAt: task.cancelledAt,
       elapsedMs: endedAt ? endedAt - task.createdAt : now() - task.createdAt,
     };
   }
 
-  return { create, get, complete, fail, toPublic, size: () => tasks.size };
+  return { create, get, complete, fail, cancel, toPublic, size: () => tasks.size };
 }

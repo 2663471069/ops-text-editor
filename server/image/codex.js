@@ -108,6 +108,17 @@ function stopProcessTree(child) {
   }
 }
 
+function cancellationError(signal) {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    reason.code = reason.code ?? 'TASK_CANCELLED';
+    return reason;
+  }
+  const error = new Error('任务已取消');
+  error.code = 'TASK_CANCELLED';
+  return error;
+}
+
 export function runCodex({
   executable,
   cwd,
@@ -118,7 +129,9 @@ export function runCodex({
   outputSchemaPath = '',
   outputLastMessagePath = '',
   operationLabel = 'Codex 生图',
+  signal,
 }) {
+  if (signal?.aborted) return Promise.reject(cancellationError(signal));
   return new Promise((resolve, reject) => {
     const args = [
       'exec',
@@ -141,9 +154,23 @@ export function runCodex({
     let stderr = '';
     let finished = false;
 
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    };
+
+    const abort = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      stopProcessTree(child);
+      reject(cancellationError(signal));
+    };
+
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
+      cleanup();
       stopProcessTree(child);
       const minutes = Math.max(1, Math.round(timeoutMs / 60_000));
       const error = new Error(`${operationLabel}超过 ${minutes} 分钟未完成，已停止任务。复杂图片可重试或改用本地合成`);
@@ -151,6 +178,11 @@ export function runCodex({
       error.diagnostic = (stderr.trim() || stdout.trim()).slice(-4000);
       reject(error);
     }, timeoutMs);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
 
     child.stdout.on('data', (chunk) => {
       stdout = appendBounded(stdout, chunk);
@@ -161,13 +193,13 @@ export function runCodex({
     child.on('error', (error) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      cleanup();
       reject(new Error(`无法启动 Codex: ${error.message}`));
     });
     child.on('close', (code) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      cleanup();
       if (code === 0) resolve({ stdout, stderr });
       else {
         const detail = (stdout.trim() || stderr.trim()).slice(-1200);
@@ -227,7 +259,7 @@ export function buildCodexPrompt({ changes, outputPath, templatePrompt = '' }) {
  * 使用当前 Codex 登录态调用内置 imagegen，并返回最终图片字节。
  * @param {{imageBuffer:Buffer, changes:Array, prompt?:string}} input
  */
-export async function render({ imageBuffer, changes, prompt: templatePrompt = '' }) {
+export async function render({ imageBuffer, changes, prompt: templatePrompt = '', signal }) {
   if (!Array.isArray(changes) || changes.length === 0) {
     const error = new Error('Codex 出图需要至少一处结构化文字变更');
     error.statusCode = 400;
@@ -248,7 +280,8 @@ export async function render({ imageBuffer, changes, prompt: templatePrompt = ''
 
   try {
     const prompt = buildCodexPrompt({ changes, outputPath, templatePrompt });
-    await runCodex({ executable, cwd: paths.ROOT, imagePath: inputPath, prompt });
+    await runCodex({ executable, cwd: paths.ROOT, imagePath: inputPath, prompt, signal });
+    signal?.throwIfAborted();
     if (!existsSync(outputPath)) {
       throw new Error('Codex 已结束，但没有在约定位置生成图片');
     }

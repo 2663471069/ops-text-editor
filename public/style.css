@@ -838,6 +838,11 @@ main {
   gap: 10px;
 }
 
+.result-actions .btn-danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
 .result-body {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -961,6 +966,18 @@ body.viewer-open {
   display: grid;
   justify-items: center;
   gap: 10px;
+}
+
+.generation-cancelled {
+  display: grid;
+  gap: 8px;
+  place-items: center;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.generation-cancelled p {
+  margin: 0;
 }
 
 .generation-message,
@@ -1108,6 +1125,10 @@ body.viewer-open {
   color: var(--warn);
 }
 
+.history-status.cancelled {
+  color: var(--muted);
+}
+
 .history-meta {
   margin: 8px 0;
 }
@@ -1135,6 +1156,11 @@ body.viewer-open {
 .history-duration.failed,
 .history-detail-duration.failed {
   color: var(--danger);
+}
+
+.history-duration.cancelled,
+.history-detail-duration.cancelled {
+  color: var(--muted);
 }
 
 .history-detail-duration {

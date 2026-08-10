@@ -34,6 +34,7 @@ app.use(express.json({ limit: '25mb' })); // base64 图片体积上限由 valida
 
 const taskStore = createTaskStore();
 const workspaceStore = createWorkspaceStore({ dataDir: configStore.paths.DATA_DIR });
+const activeGenerationJobs = new Map();
 workspaceStore.markInterruptedHistory().then((count) => {
   if (count) console.log(`[history] 已将 ${count} 条中断任务标记为失败`);
 }).catch((error) => console.error('[history] 恢复中断任务状态失败:', error.message));
@@ -85,7 +86,7 @@ const ok = (res, data) => res.json({ success: true, ...data });
 const fail = (res, status, error) => res.status(status).json({ success: false, error });
 
 async function recordTaskEvent(task, { status, provider, error }) {
-  const endedAt = task.completedAt ?? task.failedAt ?? Date.now();
+  const endedAt = task.completedAt ?? task.failedAt ?? task.cancelledAt ?? Date.now();
   const event = {
     time: new Date(endedAt).toISOString(),
     taskId: task.id,
@@ -250,6 +251,14 @@ app.post('/api/ocr/generate', async (req, res, next) => {
       return next(error);
     }
 
+    const controller = new AbortController();
+    activeGenerationJobs.set(task.id, {
+      controller,
+      historyId: history.id,
+      ownerId: req.user.id,
+      provider,
+    });
+
     ok(res, { taskId: task.id, traceId: task.traceId, historyId: history.id });
 
     // 后台执行，所有异常路径都释放槽位
@@ -261,26 +270,37 @@ app.post('/api/ocr/generate', async (req, res, next) => {
           prompt,
           changes,
           credentials: secrets.image,
+          signal: controller.signal,
         });
+        controller.signal.throwIfAborted();
+        const completed = taskStore.complete(task.id, out.data, {
+          resultMode: out.resultMode,
+          historyId: history.id,
+        });
+        if (!completed) return;
         const saved = await workspaceStore.completeHistory(
           req.user.id,
           history.id,
           out.data?.[0],
           Date.now() - task.createdAt,
         );
-        const resultUrl = saved?.resultUrl ?? out.data?.[0];
-        const completed = taskStore.complete(task.id, [resultUrl], {
-          resultMode: saved?.resultUrl ? 'url' : out.resultMode,
-          historyId: history.id,
-        });
+        if (saved?.resultUrl) {
+          completed.data = [saved.resultUrl];
+          completed.resultMode = 'url';
+        }
         await recordTaskEvent(completed, { status: 'completed', provider });
         if (out.notes?.length) console.log(`[task ${task.id}] ${out.notes.join(' / ')}`);
       } catch (error) {
+        const current = taskStore.get(task.id, req.user.id);
+        if (current?.status === 'cancelled') return;
         console.error(`[task ${task.id}] 失败:`, error.message);
         const failed = taskStore.fail(task.id, error.message || '任务执行失败');
-        await workspaceStore.failHistory(req.user.id, history.id, error.message, Date.now() - task.createdAt);
-        await recordTaskEvent(failed, { status: 'failed', provider, error });
+        if (failed) {
+          await workspaceStore.failHistory(req.user.id, history.id, error.message, Date.now() - task.createdAt);
+          await recordTaskEvent(failed, { status: 'failed', provider, error });
+        }
       } finally {
+        activeGenerationJobs.delete(task.id);
         slot.release();
       }
     })();
@@ -294,6 +314,29 @@ app.get('/api/ocr/task/:taskId', (req, res) => {
   const task = taskStore.get(req.params.taskId, req.user.id);
   if (!task) return fail(res, 404, '任务不存在');
   return res.json(taskStore.toPublic(task));
+});
+
+app.post('/api/ocr/task/:taskId/cancel', async (req, res, next) => {
+  try {
+    const task = taskStore.get(req.params.taskId, req.user.id);
+    if (!task) return fail(res, 404, '任务不存在');
+    if (task.status === 'cancelled') return ok(res, taskStore.toPublic(task));
+    if (task.status !== 'processing') return fail(res, 409, '任务已经结束，无法取消');
+
+    const job = activeGenerationJobs.get(task.id);
+    if (!job) return fail(res, 409, '任务已不在当前服务中运行');
+    const cancelled = taskStore.cancel(task.id, req.user.id);
+    if (!cancelled) return fail(res, 409, '任务已经结束，无法取消');
+
+    const reason = new Error('用户已取消生成');
+    reason.code = 'TASK_CANCELLED';
+    job.controller.abort(reason);
+    await workspaceStore.cancelHistory(req.user.id, job.historyId, Date.now() - task.createdAt);
+    await recordTaskEvent(cancelled, { status: 'cancelled', provider: job.provider });
+    return ok(res, taskStore.toPublic(cancelled));
+  } catch (error) {
+    return next(error);
+  }
 });
 
 // ---------- 自动保存草稿 ----------

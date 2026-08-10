@@ -38,7 +38,7 @@ function formatDuration(milliseconds) {
 }
 
 function statusLabel(status) {
-  return { processing: '生成中', completed: '已完成', failed: '失败' }[status] ?? status;
+  return { processing: '生成中', completed: '已完成', failed: '失败', cancelled: '已取消' }[status] ?? status;
 }
 
 function button(label, className, handler) {
