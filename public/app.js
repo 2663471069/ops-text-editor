@@ -4,6 +4,7 @@
 // 所以缩放窗口不会污染提交给后端的坐标（原规格特别强调过这点）。
 
 const POLL_INTERVAL_MS = 1500;
+const OCR_TICK_MS = 1000;
 // 后台 Codex 最长运行 25 分钟；页面多留 2 分钟，确保能读到后台的最终成功/失败状态。
 const POLL_TIMEOUT_MS = 27 * 60 * 1000;
 const REMOVAL_KEYWORDS = new Set(['消除', '删除', '去除', '清除']);
@@ -11,6 +12,7 @@ const DROPZONE_DEFAULT_TITLE = '把海报拖进来、点击选择或直接粘贴
 
 const state = {
   imageDataUrl: null,
+  imageObjectUrl: null,
   draftId: null,
   canvas: null, // {width, height}
   elements: [], // 后端返回的原始识别结果
@@ -73,6 +75,8 @@ const el = {
 // ---------- 小工具 ----------
 
 let toastTimer = null;
+let ocrTimer = null;
+let ocrStartedAt = 0;
 function toast(message, kind = 'error') {
   el.toast.textContent = message;
   el.toast.className = `toast${kind === 'ok' ? ' ok' : ''}`;
@@ -97,6 +101,32 @@ async function api(path, options = {}) {
   return body;
 }
 
+async function uploadImageForOcr(file) {
+  const response = await fetch('/api/ocr/detect-file', {
+    method: 'POST',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  });
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`服务器返回了非 JSON 响应（HTTP ${response.status}）`);
+  }
+  if (!response.ok || body.success === false) {
+    throw new Error(body?.error ?? `请求失败（HTTP ${response.status}）`);
+  }
+  return body;
+}
+
+function replaceImageSource(source, objectUrl = null) {
+  if (state.imageObjectUrl && state.imageObjectUrl !== objectUrl) {
+    URL.revokeObjectURL(state.imageObjectUrl);
+  }
+  state.imageObjectUrl = objectUrl;
+  state.imageDataUrl = source;
+}
+
 function showStage(name) {
   for (const [key, node] of [
     ['upload', el.stageUpload],
@@ -105,6 +135,70 @@ function showStage(name) {
   ]) {
     node.classList.toggle('hidden', key !== name);
   }
+}
+
+function idleFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+}
+
+function ensureOcrProgress() {
+  let block = el.dropzone.querySelector('.ocr-progress');
+  if (block) return block;
+
+  block = document.createElement('div');
+  block.className = 'ocr-progress hidden';
+
+  const top = document.createElement('div');
+  top.className = 'ocr-progress-top';
+  const spinner = document.createElement('div');
+  spinner.className = 'spinner ocr-spinner';
+  const message = document.createElement('p');
+  message.className = 'ocr-message';
+  top.append(spinner, message);
+
+  const timing = document.createElement('p');
+  timing.className = 'ocr-timing';
+  const track = document.createElement('div');
+  track.className = 'ocr-track';
+  const bar = document.createElement('div');
+  bar.className = 'ocr-bar';
+  track.append(bar);
+  const hint = document.createElement('p');
+  hint.className = 'muted small ocr-hint';
+
+  block.append(top, timing, track, hint);
+  el.dropzone.querySelector('.dropzone-inner')?.append(block);
+  return block;
+}
+
+function updateOcrProgress(message) {
+  const block = ensureOcrProgress();
+  const elapsedMs = ocrStartedAt ? Date.now() - ocrStartedAt : 0;
+  const seconds = Math.max(0, Math.round(elapsedMs / 1000));
+  const percent = Math.min(94, Math.max(8, 8 + seconds * 4));
+
+  block.classList.remove('hidden');
+  block.querySelector('.ocr-message').textContent = message;
+  block.querySelector('.ocr-timing').textContent = `已等待 ${formatDuration(elapsedMs)}`;
+  block.querySelector('.ocr-bar').style.width = `${percent}%`;
+  block.querySelector('.ocr-hint').textContent = seconds >= 20
+    ? '图片越大、文字越多，识别会更久；请保持此页面打开'
+    : '正在分析图片文字和位置，请稍等';
+}
+
+function startOcrProgress(message = '正在识别文案…') {
+  clearInterval(ocrTimer);
+  ocrStartedAt = Date.now();
+  updateOcrProgress(message);
+  ocrTimer = setInterval(() => updateOcrProgress(message), OCR_TICK_MS);
+}
+
+function stopOcrProgress() {
+  clearInterval(ocrTimer);
+  ocrTimer = null;
+  ocrStartedAt = 0;
+  const block = el.dropzone.querySelector('.ocr-progress');
+  if (block) block.classList.add('hidden');
 }
 
 function readFileAsDataUrl(file) {
@@ -209,15 +303,18 @@ async function handleFile(file) {
   }
 
   el.dropzone.classList.add('processing');
+  startOcrProgress('正在读取图片…');
   el.dropzone.querySelector('.dropzone-title').textContent = '识别中…';
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const { data } = await api('/api/ocr/detect', {
-      method: 'POST',
-      body: JSON.stringify({ imageBase64: dataUrl }),
-    });
+    await idleFrame();
+    const previewUrl = URL.createObjectURL(file);
+    updateOcrProgress('正在上传并识别文案…');
+    await idleFrame();
+    const detectStartedAt = Date.now();
+    const { data } = await uploadImageForOcr(file);
+    const detectElapsedMs = Date.now() - detectStartedAt;
 
-    state.imageDataUrl = dataUrl;
+    replaceImageSource(previewUrl, previewUrl);
     state.canvas = data.canvas;
     state.elements = data.elements;
     state.draftId = data.draftId;
@@ -229,7 +326,7 @@ async function handleFile(file) {
       return;
     }
 
-    el.preview.src = dataUrl;
+    el.preview.src = previewUrl;
     el.canvasInfo.textContent = `${data.canvas.width} × ${data.canvas.height} px`;
     el.listTitle.textContent = `识别到 ${state.elements.length} 处文字`;
     resetListView();
@@ -237,10 +334,13 @@ async function handleFile(file) {
     renderList();
     updateGenerateState();
     showStage('edit');
+    const optimized = data.optimization?.applied ? ' · 已优化识别图' : '';
+    setTimeout(() => setDraftStatus(`识别耗时 ${formatDuration(detectElapsedMs)}${optimized} · 已自动保存`, 'ok'), 0);
     setDraftStatus('已自动保存', 'ok');
   } catch (error) {
     toast(error.message);
   } finally {
+    stopOcrProgress();
     el.dropzone.classList.remove('processing');
     el.dropzone.querySelector('.dropzone-title').textContent = DROPZONE_DEFAULT_TITLE;
   }
@@ -661,7 +761,7 @@ async function restoreLatestDraft() {
     const { draft } = await api('/api/drafts/latest');
     if (!draft) return;
     const dataUrl = await imageUrlAsDataUrl(draft.imageUrl);
-    state.imageDataUrl = dataUrl;
+    replaceImageSource(dataUrl);
     state.draftId = draft.id;
     state.canvas = draft.canvas;
     state.elements = draft.elements;
@@ -770,7 +870,7 @@ async function generate() {
   try {
     const { taskId } = await api('/api/ocr/generate', {
       method: 'POST',
-      body: JSON.stringify({ imageBase64: state.imageDataUrl, changes, draftId: state.draftId }),
+      body: JSON.stringify({ changes, draftId: state.draftId }),
     });
     state.taskId = taskId;
     state.canceling = false;
@@ -1026,8 +1126,11 @@ async function startNewPoster({ findLatest = false } = {}) {
     }
   }
 
+  if (state.imageObjectUrl) URL.revokeObjectURL(state.imageObjectUrl);
+
   Object.assign(state, {
     imageDataUrl: null,
+    imageObjectUrl: null,
     draftId: null,
     canvas: null,
     elements: [],

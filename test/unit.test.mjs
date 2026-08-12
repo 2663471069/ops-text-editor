@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { parseGenerateRequest, parseDetectRequest, parseImageDataUrl } from '../server/validate.js';
+import { parseGenerateRequest, parseDetectRequest, parseImageDataUrl, parseImageBuffer } from '../server/validate.js';
 import { buildTextEditorPrompt, formatChange, isRemovalInstruction, validateTemplate, normalizeText, DEFAULT_TEMPLATE } from '../server/prompt.js';
 import { describePosition } from '../server/position.js';
 import { createQueue } from '../server/queue.js';
@@ -46,6 +46,21 @@ test('声明的 MIME 与实际内容不符时拒绝', () => {
   const jpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]).toString('base64');
   const result = parseImageDataUrl(`data:image/png;base64,${jpegHeader}`);
   assert.match(result.error, /与声明的类型 image\/png 不符/);
+});
+
+test('二进制图片上传校验 MIME 和魔术字节', () => {
+  const png = Buffer.from(PNG_1X1.split(',')[1], 'base64');
+  assert.equal(parseImageBuffer(png, 'image/png').mime, 'image/png');
+  assert.match(parseImageBuffer(png, 'image/jpeg').error, /不符/);
+});
+
+test('生成阶段可直接使用已保存草稿，无需重复上传原图', () => {
+  const parsed = parseGenerateRequest({
+    draftId: '11111111-1111-4111-8111-111111111111',
+    changes: [{ original: 'A', modified: 'B' }],
+  });
+  assert.equal(parsed.error, undefined);
+  assert.equal(parsed.image, null);
 });
 
 test('prompt 超长被拒绝（原参考实现无长度上限）', () => {

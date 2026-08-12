@@ -6,6 +6,8 @@ import { assertPixelBudget } from '../validate.js';
 
 export const MAX_SHORT_EDGE = 2048;
 export const JPEG_QUALITY = 85;
+export const OCR_MAX_LONG_EDGE = 2400;
+export const OCR_PASSTHROUGH_BYTES = 3 * 1024 * 1024;
 
 /** @returns {Promise<import('@napi-rs/canvas').Image>} */
 export async function decode(buffer) {
@@ -46,6 +48,48 @@ export async function compress(buffer, { maxShortEdge = MAX_SHORT_EDGE, quality 
     width,
     height,
     scaled: ratio !== 1,
+  };
+}
+
+/**
+ * 生成 OCR 专用副本：小图直接使用，大图按长边缩放并转为 JPEG。
+ * 原图不会被替换，草稿和最终生成仍使用原始文件。
+ */
+export async function prepareForOcr(buffer, mime, {
+  maxLongEdge = OCR_MAX_LONG_EDGE,
+  passthroughBytes = OCR_PASSTHROUGH_BYTES,
+  quality = 88,
+} = {}) {
+  const image = await decode(buffer);
+  const longEdge = Math.max(image.width, image.height);
+  const ratio = longEdge > maxLongEdge ? maxLongEdge / longEdge : 1;
+
+  if (ratio === 1 && buffer.length <= passthroughBytes) {
+    return {
+      buffer,
+      mime,
+      width: image.width,
+      height: image.height,
+      sourceWidth: image.width,
+      sourceHeight: image.height,
+      scaled: false,
+      optimized: false,
+    };
+  }
+
+  const width = Math.max(1, Math.round(image.width * ratio));
+  const height = Math.max(1, Math.round(image.height * ratio));
+  const canvas = createCanvas(width, height);
+  canvas.getContext('2d').drawImage(image, 0, 0, width, height);
+  return {
+    buffer: await canvas.encode('jpeg', quality),
+    mime: 'image/jpeg',
+    width,
+    height,
+    sourceWidth: image.width,
+    sourceHeight: image.height,
+    scaled: ratio !== 1,
+    optimized: true,
   };
 }
 

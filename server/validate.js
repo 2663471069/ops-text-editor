@@ -27,6 +27,28 @@ const DATA_URL_HEAD = /^data:(image\/[\w.+-]+);base64,/i;
 const BASE64_BODY = /^[A-Za-z0-9+/]*={0,2}$/;
 
 /**
+ * 校验二进制图片。二进制上传避免浏览器把大图转成 Base64 和 JSON。
+ * @returns {{mime:string, buffer:Buffer} | {error:string}}
+ */
+export function parseImageBuffer(value, declaredMime) {
+  const buffer = Buffer.isBuffer(value) ? value : null;
+  if (!buffer?.length) return { error: '缺少原始图片' };
+  if (buffer.length > LIMITS.maxImageBytes) {
+    return { error: `图片超过 ${Math.floor(LIMITS.maxImageBytes / 1024 / 1024)}MB 上限` };
+  }
+
+  const declared = String(declaredMime ?? '').split(';')[0].trim().toLowerCase();
+  const mime = MIME_ALIAS.get(declared) ?? declared;
+  if (!MAGIC.has(mime)) {
+    return { error: `不支持的图片类型 ${declared || '未知'}，仅支持 JPEG / PNG / WebP` };
+  }
+  if (!MAGIC.get(mime)(buffer)) {
+    return { error: `图片内容与声明的类型 ${declared} 不符` };
+  }
+  return { mime, buffer };
+}
+
+/**
  * 严格解析 data URL：校验前缀、MIME 白名单、base64 合法性、体积、魔术字节。
  * @returns {{mime:string, buffer:Buffer} | {error:string}}
  */
@@ -57,13 +79,7 @@ export function parseImageDataUrl(value) {
     return { error: 'base64 解码失败' };
   }
   if (buffer.length === 0) return { error: '图片内容为空' };
-  if (buffer.length > LIMITS.maxImageBytes) {
-    return { error: `图片超过 ${Math.floor(LIMITS.maxImageBytes / 1024 / 1024)}MB 上限` };
-  }
-  if (!MAGIC.get(mime)(buffer)) {
-    return { error: `图片内容与声明的类型 ${declared} 不符` };
-  }
-  return { mime, buffer };
+  return parseImageBuffer(buffer, mime);
 }
 
 /** 解码后的像素总数上限，防解压炸弹。由 codec 拿到真实宽高后调用。 */
@@ -109,8 +125,21 @@ export function parseDetectRequest(body = {}) {
  * 对应原规格 reference/ocr-generation-request.js，补上 prompt 长度与 base64 实际解码。
  */
 export function parseGenerateRequest(body = {}) {
-  const image = parseImageDataUrl(body.imageBase64);
-  if (image.error) return { error: image.error };
+  let draftId = null;
+  if (body.draftId !== undefined && body.draftId !== null && body.draftId !== '') {
+    draftId = String(body.draftId);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(draftId)) {
+      return { error: 'draftId 格式无效' };
+    }
+  }
+
+  let image = null;
+  if (body.imageBase64 !== undefined && body.imageBase64 !== null && body.imageBase64 !== '') {
+    image = parseImageDataUrl(body.imageBase64);
+    if (image.error) return { error: image.error };
+  } else if (!draftId) {
+    return { error: '缺少原始图片' };
+  }
 
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   if (prompt.length > LIMITS.maxPromptChars) {
@@ -130,14 +159,6 @@ export function parseGenerateRequest(body = {}) {
   }
 
   if (!changes && !prompt) return { error: '缺少提示词或文字变更' };
-
-  let draftId = null;
-  if (body.draftId !== undefined && body.draftId !== null && body.draftId !== '') {
-    draftId = String(body.draftId);
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(draftId)) {
-      return { error: 'draftId 格式无效' };
-    }
-  }
 
   return { image, prompt, changes, draftId, action: '文案修改' };
 }
