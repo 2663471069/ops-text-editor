@@ -4,7 +4,7 @@ import express from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { appendFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import * as configStore from './config.js';
@@ -12,13 +12,13 @@ import { createQueue } from './queue.js';
 import { createTaskStore } from './task-store.js';
 import { createWorkspaceStore, workspaceLimits } from './workspace-store.js';
 import { estimateDurationRange, parseCompletedCodexDurations } from './task-metrics.js';
-import { parseDetectRequest, parseGenerateRequest, LIMITS } from './validate.js';
+import { parseDetectRequest, parseGenerateRequest, parseImageBuffer, LIMITS } from './validate.js';
 import { buildTextEditorPrompt, isRemovalInstruction, validateTemplate, DEFAULT_TEMPLATE } from './prompt.js';
 import { describePosition } from './position.js';
 import { detectText } from './ocr/index.js';
 import { generate } from './image/index.js';
 import { isCodexAvailable } from './image/codex.js';
-import { measure } from './image/codec.js';
+import { measure, prepareForOcr } from './image/codec.js';
 import { makeProbeImage } from './image/probe.js';
 import { listFonts, publicFont, resolveFont } from './fonts.js';
 
@@ -156,40 +156,84 @@ function activeTemplate() {
 
 // ---------- OCR ----------
 
+function scaleDetectedElements(elements, fromCanvas, toCanvas) {
+  if (fromCanvas.width === toCanvas.width && fromCanvas.height === toCanvas.height) return elements;
+  const scaleX = toCanvas.width / fromCanvas.width;
+  const scaleY = toCanvas.height / fromCanvas.height;
+  return elements.map((item) => ({
+    ...item,
+    x: Math.round(item.x * scaleX),
+    y: Math.round(item.y * scaleY),
+    w: Math.max(1, Math.round(item.w * scaleX)),
+    h: Math.max(1, Math.round(item.h * scaleY)),
+    fontSize: Math.max(1, Math.round(item.fontSize * (item.isVertical ? scaleX : scaleY))),
+  }));
+}
+
+async function detectAndSaveDraft(req, image, { minAreaPercent, excludeRects } = {}) {
+  const ocrInput = await prepareForOcr(image.buffer, image.mime);
+  const originalCanvas = { width: ocrInput.sourceWidth, height: ocrInput.sourceHeight };
+  const ocrCanvas = { width: ocrInput.width, height: ocrInput.height };
+  const secrets = configStore.getSecrets();
+
+  const scaledExcludeRects = (excludeRects ?? []).map((rect) => ({
+    x: rect.x * ocrCanvas.width / originalCanvas.width,
+    y: rect.y * ocrCanvas.height / originalCanvas.height,
+    w: rect.w * ocrCanvas.width / originalCanvas.width,
+    h: rect.h * ocrCanvas.height / originalCanvas.height,
+  }));
+  const detected = await detectText({
+    provider: secrets.ocr.provider,
+    credentials: secrets.ocr,
+    imageBase64Body: ocrInput.buffer.toString('base64'),
+    canvas: ocrCanvas,
+    minAreaPercent: minAreaPercent ?? secrets.ocr.minAreaPercent,
+    excludeRects: scaledExcludeRects,
+  });
+  const elements = scaleDetectedElements(detected.elements, ocrCanvas, originalCanvas);
+
+  const draft = await workspaceStore.createDraft({
+    ownerId: req.user.id,
+    imageBuffer: image.buffer,
+    mime: image.mime,
+    canvas: originalCanvas,
+    elements,
+  });
+
+  return {
+    elements,
+    canvas: originalCanvas,
+    rawCount: detected.rawCount,
+    provider: detected.provider,
+    draftId: draft.id,
+    optimization: {
+      applied: ocrInput.optimized,
+      originalBytes: image.buffer.length,
+      ocrBytes: ocrInput.buffer.length,
+      ocrCanvas,
+    },
+  };
+}
+
 app.post('/api/ocr/detect', async (req, res, next) => {
   try {
     const parsed = parseDetectRequest(req.body);
     if (parsed.error) return fail(res, 400, parsed.error);
+    return ok(res, { data: await detectAndSaveDraft(req, parsed.image, parsed) });
+  } catch (error) {
+    return next(error);
+  }
+});
 
-    const canvas = await measure(parsed.image.buffer);
-    const secrets = configStore.getSecrets();
-
-    const result = await detectText({
-      provider: secrets.ocr.provider,
-      credentials: secrets.ocr,
-      imageBase64Body: parsed.image.buffer.toString('base64'),
-      canvas,
-      minAreaPercent: parsed.minAreaPercent ?? secrets.ocr.minAreaPercent,
-      excludeRects: parsed.excludeRects,
-    });
-
-    const draft = await workspaceStore.createDraft({
-      ownerId: req.user.id,
-      imageBuffer: parsed.image.buffer,
-      mime: parsed.image.mime,
-      canvas: result.canvas,
-      elements: result.elements,
-    });
-
-    return ok(res, {
-      data: {
-        elements: result.elements,
-        canvas: result.canvas,
-        rawCount: result.rawCount,
-        provider: result.provider,
-        draftId: draft.id,
-      },
-    });
+// 浏览器直接上传二进制图片，避免 Base64 膨胀和 JSON 序列化卡顿。
+app.post('/api/ocr/detect-file', express.raw({
+  type: ['image/jpeg', 'image/png', 'image/webp'],
+  limit: LIMITS.maxImageBytes,
+}), async (req, res, next) => {
+  try {
+    const image = parseImageBuffer(req.body, req.headers['content-type']);
+    if (image.error) return fail(res, 400, image.error);
+    return ok(res, { data: await detectAndSaveDraft(req, image) });
   } catch (error) {
     return next(error);
   }
@@ -202,10 +246,17 @@ app.post('/api/ocr/generate', async (req, res, next) => {
     const parsed = parseGenerateRequest(req.body);
     if (parsed.error) return fail(res, 400, parsed.error);
 
+    let sourceImage = parsed.image;
+    if (!sourceImage && parsed.draftId) {
+      const asset = await workspaceStore.draftImage(req.user.id, parsed.draftId);
+      if (!asset) return fail(res, 404, '草稿不存在或已过期，请重新上传图片');
+      sourceImage = { mime: asset.mime, buffer: await readFile(asset.file) };
+    }
+
     const secrets = configStore.getSecrets();
     const provider = secrets.image.provider;
 
-    const canvas = await measure(parsed.image.buffer);
+    const canvas = await measure(sourceImage.buffer);
 
     let changes = null;
     let prompt = parsed.prompt;
@@ -233,15 +284,15 @@ app.post('/api/ocr/generate', async (req, res, next) => {
         ownerId: req.user.id,
         prompt,
         action: parsed.action,
-        inputImageRef: `${parsed.image.mime}:${parsed.image.buffer.length}B`,
+        inputImageRef: `${sourceImage.mime}:${sourceImage.buffer.length}B`,
         meta: { provider, canvas },
       });
       history = await workspaceStore.startHistory({
         ownerId: req.user.id,
         taskId: task.id,
         draftId: parsed.draftId,
-        imageBuffer: parsed.image.buffer,
-        mime: parsed.image.mime,
+        imageBuffer: sourceImage.buffer,
+        mime: sourceImage.mime,
         canvas,
         changes,
         provider,
@@ -266,7 +317,7 @@ app.post('/api/ocr/generate', async (req, res, next) => {
       try {
         const out = await generate({
           provider,
-          imageBuffer: parsed.image.buffer,
+          imageBuffer: sourceImage.buffer,
           prompt,
           changes,
           credentials: secrets.image,

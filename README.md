@@ -60,8 +60,9 @@ test/             单元测试 + 端到端 + 渲染检查
 
 挂在 `/api` 下，契约与来源规格一致：
 
-- `POST /ocr/detect` — `{imageBase64}` → `{elements[], canvas, rawCount}`
-- `POST /ocr/generate` — `{imageBase64, changes[]}` → `{taskId, traceId}`
+- `POST /ocr/detect-file` — 二进制图片直传 → `{elements[], canvas, rawCount, draftId}`（网页默认）
+- `POST /ocr/detect` — `{imageBase64}` → `{elements[], canvas, rawCount, draftId}`（保留兼容）
+- `POST /ocr/generate` — `{draftId, changes[]}` → `{taskId, traceId}`；仍兼容 `{imageBase64, changes[]}`
 - `GET /ocr/task/:taskId` — `processing` / `completed` / `failed`
 - `GET|PUT|DELETE /drafts/...` — 自动保存、恢复和删除当前草稿
 - `GET|DELETE /history/...` — 生成记录、前后对比、下载与继续编辑
@@ -119,4 +120,5 @@ Codex 生图后台最多等待 25 分钟，页面最多等待 27 分钟。复杂
 - 本机公司字体放在 `data/fonts/` 下（支持 TTF、OTF、TTC、WOFF、WOFF2），编辑每条文案时可从下拉框指定字体及字重；未选择时继续自动保留原字体。`data/` 不提交到公开 GitHub，给同事部署时需要单独复制字体目录并确认字体授权。
 - 编辑工作台支持搜索原文/新文案、按全部/已修改/未修改筛选、把公司字体批量应用到已修改项，以及单条撤销；预览和生成操作区在长列表中保持可见，平板与手机会自动切换为上下布局。
 - 上传页支持点击选择、拖拽以及 `Ctrl+V` 直接粘贴截图或剪贴板图片；编辑过程中粘贴新图片会先确认，避免误覆盖当前草稿，生成进行中不会切换图片。
+- 网页上传使用二进制直传，避免大图转 Base64/JSON 导致页面卡顿；过大的识别输入会自动生成 OCR 专用副本，原图仍完整保存并用于最终生成。识别期间会显示已等待时间和进度提示。
 - 草稿和记录保存在 `data/workspace/`，不会上传到 GitHub。生成记录默认最多 50 条并保留 30 天，也可在页面中手动删除。
